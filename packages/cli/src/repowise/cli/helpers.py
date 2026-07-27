@@ -647,6 +647,11 @@ def resolve_provider(
       4. Auto-detect from API key env vars
     """
     from repowise.core.providers import get_provider
+    from repowise.core.providers.llm.registry import (
+        PROVIDER_AUTODETECT_ORDER,
+        provider_credentials_present,
+        provider_kwargs,
+    )
 
     cfg: dict[str, Any] = {}
     if repo_path is not None:
@@ -668,27 +673,32 @@ def resolve_provider(
     if model is None and cfg.get("model"):
         model = cfg["model"]
 
-    def _resolve_base_url(name: str) -> str | None:
-        """Return base_url from env or repo config for the provider."""
-        env_vars = {
-            "anthropic": ["ANTHROPIC_BASE_URL"],
-            "openai": ["OPENAI_BASE_URL"],
-            "gemini": ["GEMINI_BASE_URL"],
-            "deepseek": ["DEEPSEEK_BASE_URL"],
-            "kimi": ["KIMI_BASE_URL"],
-            "ollama": ["OLLAMA_BASE_URL"],
-            "litellm": ["LITELLM_BASE_URL", "LITELLM_API_BASE"],
-        }
-        for var in env_vars.get(name, []):
-            val = os.environ.get(var)
-            if val:
-                return val
+    def _config_base_url(name: str) -> str | None:
+        """Return a base_url the repo config sets for the provider, if any.
+
+        Env vars are handled by :func:`provider_kwargs` from the shared
+        registry mapping; this covers only the config-file source, which is
+        CLI-specific.
+        """
         section = cfg.get(name)
         if isinstance(section, dict):
             base_url = section.get("base_url")
             if base_url:
                 return base_url
         return None
+
+    def _build(name: str) -> Any:
+        """Instantiate ``name`` with env-derived kwargs plus config fallbacks."""
+        kwargs = provider_kwargs(name, model=model, repo_path=repo_path)
+        # Applied to any name, as before: openrouter takes a base_url without
+        # having an env var for one, so gating this on the env map would drop a
+        # config value that used to be honored. (A stray `mock: {base_url: …}`
+        # in config.yaml still reaches a constructor that has no such
+        # parameter and raises TypeError. Longstanding, orthogonal to #1119.)
+        config_base_url = _config_base_url(name)
+        if config_base_url:
+            kwargs.setdefault("base_url", config_base_url)
+        return get_provider(name, **kwargs)
 
     if provider_name is not None:
         # Validate configuration before attempting to create provider
@@ -699,103 +709,15 @@ def resolve_provider(
             # For explicit provider requests, we still try to create it
             # The provider constructor will fail if the API key is actually required
 
-        kwargs: dict[str, Any] = {}
-        if model:
-            kwargs["model"] = model
-        base_url = _resolve_base_url(provider_name)
-        if base_url:
-            kwargs["base_url"] = base_url
-        if provider_name == "codex_cli" and repo_path is not None:
-            kwargs["repo_path"] = repo_path
-        if provider_name == "opencode" and repo_path is not None:
-            kwargs["repo_path"] = repo_path
+        return _build(provider_name)
 
-        # Pass API key from environment if available
-        if provider_name == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
-            kwargs["api_key"] = os.environ["ANTHROPIC_API_KEY"]
-        elif provider_name == "openai" and os.environ.get("OPENAI_API_KEY"):
-            kwargs["api_key"] = os.environ["OPENAI_API_KEY"]
-        elif provider_name == "gemini" and (
-            os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        ):
-            kwargs["api_key"] = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        elif provider_name == "openrouter" and os.environ.get("OPENROUTER_API_KEY"):
-            kwargs["api_key"] = os.environ["OPENROUTER_API_KEY"]
-        elif provider_name == "deepseek" and os.environ.get("DEEPSEEK_API_KEY"):
-            kwargs["api_key"] = os.environ["DEEPSEEK_API_KEY"]
-        elif provider_name == "kimi" and os.environ.get("KIMI_API_KEY"):
-            kwargs["api_key"] = os.environ["KIMI_API_KEY"]
-        elif provider_name == "litellm" and os.environ.get("LITELLM_API_KEY"):
-            kwargs["api_key"] = os.environ["LITELLM_API_KEY"]
-        elif provider_name == "ollama" and os.environ.get("OLLAMA_BASE_URL"):
-            kwargs["base_url"] = os.environ["OLLAMA_BASE_URL"]
-
-        return get_provider(provider_name, **kwargs)
-
-    # Auto-detect from env vars
-    if os.environ.get("ANTHROPIC_API_KEY") and os.environ["ANTHROPIC_API_KEY"].strip():
-        kwargs = (
-            {"model": model, "api_key": os.environ["ANTHROPIC_API_KEY"]}
-            if model
-            else {"api_key": os.environ["ANTHROPIC_API_KEY"]}
-        )
-        base_url = _resolve_base_url("anthropic")
-        if base_url:
-            kwargs["base_url"] = base_url
-        return get_provider("anthropic", **kwargs)
-    if os.environ.get("OPENAI_API_KEY") and os.environ["OPENAI_API_KEY"].strip():
-        kwargs = (
-            {"model": model, "api_key": os.environ["OPENAI_API_KEY"]}
-            if model
-            else {"api_key": os.environ["OPENAI_API_KEY"]}
-        )
-        base_url = _resolve_base_url("openai")
-        if base_url:
-            kwargs["base_url"] = base_url
-        return get_provider("openai", **kwargs)
-    if os.environ.get("OPENROUTER_API_KEY") and os.environ["OPENROUTER_API_KEY"].strip():
-        kwargs = (
-            {"model": model, "api_key": os.environ["OPENROUTER_API_KEY"]}
-            if model
-            else {"api_key": os.environ["OPENROUTER_API_KEY"]}
-        )
-        return get_provider("openrouter", **kwargs)
-    if os.environ.get("OLLAMA_BASE_URL") and os.environ["OLLAMA_BASE_URL"].strip():
-        kwargs = (
-            {"model": model, "base_url": os.environ["OLLAMA_BASE_URL"]}
-            if model
-            else {"base_url": os.environ["OLLAMA_BASE_URL"]}
-        )
-        return get_provider("ollama", **kwargs)
-    if (os.environ.get("GEMINI_API_KEY") and os.environ["GEMINI_API_KEY"].strip()) or (
-        os.environ.get("GOOGLE_API_KEY") and os.environ["GOOGLE_API_KEY"].strip()
-    ):
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        kwargs = {"model": model, "api_key": api_key} if model else {"api_key": api_key}
-        base_url = _resolve_base_url("gemini")
-        if base_url:
-            kwargs["base_url"] = base_url
-        return get_provider("gemini", **kwargs)
-    if os.environ.get("DEEPSEEK_API_KEY") and os.environ["DEEPSEEK_API_KEY"].strip():
-        kwargs = (
-            {"model": model, "api_key": os.environ["DEEPSEEK_API_KEY"]}
-            if model
-            else {"api_key": os.environ["DEEPSEEK_API_KEY"]}
-        )
-        base_url = _resolve_base_url("deepseek")
-        if base_url:
-            kwargs["base_url"] = base_url
-        return get_provider("deepseek", **kwargs)
-    if os.environ.get("KIMI_API_KEY") and os.environ["KIMI_API_KEY"].strip():
-        kwargs = (
-            {"model": model, "api_key": os.environ["KIMI_API_KEY"]}
-            if model
-            else {"api_key": os.environ["KIMI_API_KEY"]}
-        )
-        base_url = _resolve_base_url("kimi")
-        if base_url:
-            kwargs["base_url"] = base_url
-        return get_provider("kimi", **kwargs)
+    # Auto-detect from whatever credentials the env carries, in the shared
+    # priority order. The per-provider env-var mapping lives in the registry
+    # beside the provider table, so adding a provider wires it into the CLI and
+    # the MCP server at once instead of into whichever copy got remembered.
+    for candidate in PROVIDER_AUTODETECT_ORDER:
+        if provider_credentials_present(candidate):
+            return _build(candidate)
 
     raise click.ClickException(
         "No provider configured. Use --provider, set REPOWISE_PROVIDER, "
@@ -888,16 +810,17 @@ def validate_provider_config(provider_name: str | None = None) -> list[str]:
         """Check if environment variable exists (even if empty)."""
         return var_name in os.environ
 
-    # Define required environment variables for each provider
+    # Required environment variables per provider, read from the registry that
+    # also drives resolution, so a provider added there is validated here without
+    # a second edit. The agent-CLI providers are absent by design: they need no
+    # env var, so they are handled by the binary checks below instead.
+    from repowise.core.providers.llm.registry import (
+        PROVIDER_API_KEY_ENVS,
+        provider_required_envs,
+    )
+
     provider_env_vars = {
-        "anthropic": ["ANTHROPIC_API_KEY"],
-        "openai": ["OPENAI_API_KEY"],
-        "openrouter": ["OPENROUTER_API_KEY"],
-        "deepseek": ["DEEPSEEK_API_KEY"],
-        "kimi": ["KIMI_API_KEY"],
-        "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],  # Either one
-        "ollama": ["OLLAMA_BASE_URL"],
-        "litellm": ["LITELLM_API_KEY"],  # May need others depending on backend
+        name: list(provider_required_envs(name)) for name in (*PROVIDER_API_KEY_ENVS, "ollama")
     }
 
     if provider_name:

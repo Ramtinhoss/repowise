@@ -45,8 +45,20 @@ _MAX_STDERR_CHARS = 1_000
 _MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/\-]*$")
 
 _OPENCODE_READONLY_CONFIG = json.dumps(
-    {"permission": {k: "deny" for k in
-     ("edit", "bash", "webfetch", "websearch", "external_directory", "doom_loop", "task")}}
+    {
+        "permission": {
+            k: "deny"
+            for k in (
+                "edit",
+                "bash",
+                "webfetch",
+                "websearch",
+                "external_directory",
+                "doom_loop",
+                "task",
+            )
+        }
+    }
 )
 
 
@@ -159,9 +171,7 @@ def _error_message(stderr: str, stdout: str, returncode: int) -> str:
     return f"opencode run exited with {returncode}"
 
 
-_MODEL_LINE_RE = re.compile(
-    r"^\s*([a-zA-Z0-9][a-zA-Z0-9._\-]*)/([a-zA-Z0-9][a-zA-Z0-9._/\-]*)\s*$"
-)
+_MODEL_LINE_RE = re.compile(r"^\s*([a-zA-Z0-9][a-zA-Z0-9._\-]*)/([a-zA-Z0-9][a-zA-Z0-9._/\-]*)\s*$")
 
 
 def _parse_models_output(output: str) -> list[str]:
@@ -249,6 +259,12 @@ class OpenCodeProvider(BaseProvider):
         repo_path: Working directory passed to opencode via ``--dir``.
         rate_limiter: Serializes subprocess calls by default.
     """
+
+    # `opencode run` spawns a process and drives a whole agent turn, and the
+    # model behind it is whatever the user configured, local ones included.
+    # Minutes, not seconds. Stays under _EXEC_TIMEOUT_SECONDS so the caller
+    # gives up before the subprocess does and the error names the real cause.
+    interactive_timeout_s: float = 180.0
 
     def __init__(
         self,

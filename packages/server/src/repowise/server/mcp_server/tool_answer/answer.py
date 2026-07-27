@@ -144,6 +144,7 @@ from repowise.server.mcp_server.tool_answer.symbols import (
 from repowise.server.mcp_server.tool_answer.synthesis import (
     _hash_question,
     _resolve_provider_for_answer,
+    synthesize,
 )
 
 _log = logging.getLogger("repowise.mcp.answer")
@@ -556,6 +557,44 @@ def _build_data_shape_payload(grounded: dict, t0: float, repository) -> dict:
         ),
     }
     return payload
+
+
+def _degraded_payload(
+    *,
+    reason: str,
+    note: str,
+    hits: list[dict],
+    fallback_targets: list[str],
+    repository,
+    t0: float,
+) -> dict:
+    """Shape a synthesis-less get_answer response.
+
+    Both ways synthesis can be missing (no provider resolvable, the call
+    failed) return the same payload: retrieval hits the agent can act on, plus
+    a loud marker. ``degraded`` is mirrored into ``_meta`` because consumers
+    read freshness and health signals from there. The failure path used to
+    set only the top-level key, so a caller watching ``_meta`` saw a normal
+    empty answer.
+    """
+    return {
+        "answer": "",
+        "citations": [],
+        "confidence": "low",
+        "degraded": reason,
+        "fallback_targets": fallback_targets,
+        "retrieval": _serialize_hits(hits),
+        "note": note,
+        "_meta": {
+            **_build_meta(
+                timing_ms=(time.perf_counter() - t0) * 1000,
+                hint=_answer_hint("low", len(hits)),
+                repository=repository,
+                targets=fallback_targets,
+            ),
+            "degraded": reason,
+        },
+    }
 
 
 @mcp.tool()
@@ -1117,27 +1156,18 @@ async def get_answer(
             "get_answer running WITHOUT synthesis: no LLM provider resolvable "
             "(set REPOWISE_PROVIDER + its API key, or any supported API key)."
         )
-        payload = {
-            "answer": "",
-            "citations": [],
-            "confidence": "low",
-            "degraded": "no-llm-provider",
-            "fallback_targets": fallback_targets,
-            "retrieval": _serialize_hits(hits),
-            "note": (
+        return _degraded_payload(
+            reason="no-llm-provider",
+            note=(
                 "DEGRADED: no LLM provider configured (set REPOWISE_PROVIDER "
                 "+ API key). "
                 "Returning retrieval hits only — Read the listed files to answer."
             ),
-            "_meta": _build_meta(
-                timing_ms=(time.perf_counter() - t0) * 1000,
-                hint=_answer_hint("low", len(hits)),
-                repository=repository,
-                targets=fallback_targets,
-            ),
-        }
-        payload["_meta"]["degraded"] = "no-llm-provider"
-        return payload
+            hits=hits,
+            fallback_targets=fallback_targets,
+            repository=repository,
+            t0=t0,
+        )
 
     # Ambiguous retrieval (always-synthesize): pull real page content across the
     # non-dominant top pages so the LLM synthesizes over the actual candidate
@@ -1167,35 +1197,20 @@ async def get_answer(
         context=_build_context_block_v2(hits, prelude=prelude, decisions=decisions),
     )
 
-    answer_text = ""
-    try:
-        response = await asyncio.wait_for(
-            provider.generate(
-                system_prompt=_SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-                max_tokens=1024,
-                temperature=0.2,
-            ),
-            timeout=30.0,
+    # The call budgets itself against what this provider actually needs. A
+    # remote API answers in single-digit seconds; an agent-CLI subprocess or a
+    # local model needs minutes, and the old flat 30s cancelled every one of
+    # those before it could return (#1119).
+    answer_text, failure_note = await synthesize(provider, _SYSTEM_PROMPT, user_prompt)
+    if failure_note is not None:
+        return _degraded_payload(
+            reason="synthesis-failed",
+            note=failure_note,
+            hits=hits,
+            fallback_targets=fallback_targets,
+            repository=repository,
+            t0=t0,
         )
-        answer_text = (response.content or "").strip()
-    except Exception as exc:
-        _log.warning("get_answer LLM call failed: %s", exc)
-        return {
-            "answer": "",
-            "citations": [],
-            "confidence": "low",
-            "degraded": "synthesis-failed",
-            "fallback_targets": fallback_targets,
-            "retrieval": _serialize_hits(hits),
-            "note": f"DEGRADED: LLM synthesis failed ({type(exc).__name__}). Read the listed files to answer.",
-            "_meta": _build_meta(
-                timing_ms=(time.perf_counter() - t0) * 1000,
-                hint=_answer_hint("low", len(hits)),
-                repository=repository,
-                targets=fallback_targets,
-            ),
-        }
 
     citations = [
         h["target_path"] for h in hits if h["target_path"] and h["target_path"] in answer_text

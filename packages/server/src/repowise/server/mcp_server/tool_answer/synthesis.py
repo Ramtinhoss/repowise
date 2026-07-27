@@ -1,20 +1,40 @@
-"""Provider resolution and cache-key hashing for get_answer.
+"""Provider resolution, synthesis budget, and cache-key hashing for get_answer.
 
 Recovers the LLM provider the user configured for ``repowise init`` so the
-MCP server can synthesise without a separate config, and hashes the question
-for the answer cache.
+MCP server can synthesise without a separate config, decides how long one
+synthesis call may take, and hashes the question for the answer cache.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json as _json
 import logging
+import math
 import os
 from pathlib import Path
-from typing import Any
+
+from repowise.server.mcp_server.tool_answer.config import (
+    _SYNTHESIS_MAX_TOKENS,
+    _SYNTHESIS_TEMPERATURE,
+)
 
 _log = logging.getLogger("repowise.mcp.answer")
+
+# Escape hatch for the per-provider synthesis budget. Seconds, float.
+_TIMEOUT_ENV = "REPOWISE_ANSWER_TIMEOUT_S"
+# Used only if a provider reports no usable budget of its own. Every
+# BaseProvider subclass inherits one, so this covers a runtime-registered
+# provider that does not subclass it, or one that declares nonsense.
+_FALLBACK_TIMEOUT_S = 30.0
+# Ceiling on any budget, however configured. get_answer is a tool an agent
+# blocks on, and every MCP client enforces its own tool timeout underneath
+# this one, so a longer budget cannot produce an answer the client will still
+# accept. It only converts our diagnosable degraded payload into the client's
+# bare transport error. 600s also matches the agent-CLI providers' own
+# subprocess ceiling, past which raising this is inert anyway.
+_MAX_TIMEOUT_S = 600.0
 
 
 def _hash_question(question: str) -> str:
@@ -94,16 +114,25 @@ def _load_repo_provider_config(
 def _resolve_provider_for_answer(repo_path: Path | None = None):
     """Best-effort provider lookup mirroring cli/helpers.resolve_provider.
 
-    Avoids the click dependency from the cli package. Returns a BaseProvider
-    or None if no API key / provider is configured.
+    Avoids the click dependency from the cli package, but shares that
+    function's env-var mapping (``repowise.core.providers.llm.registry``) so
+    the two cannot drift apart. Returns a BaseProvider or None if no API key /
+    provider is configured.
 
-    Resolution order: process env vars first, then ``.repowise/state.json``
-    + ``.repowise/.env`` for the active repo. The persisted values are the
-    same ones ``repowise init`` and ``repowise update`` use, so get_answer
-    follows the user's existing provider choice without a separate config.
+    Resolution order: process env vars first, then ``.repowise/config.yaml``
+    / ``state.json`` + ``.repowise/.env`` for the active repo. The persisted
+    values are the same ones ``repowise init`` and ``repowise update`` use, so
+    get_answer follows the user's existing provider choice without a separate
+    config.
     """
     try:
-        from repowise.core.providers.llm.registry import get_provider
+        from repowise.core.providers.llm.registry import (
+            PROVIDER_AUTODETECT_ORDER,
+            get_provider,
+            provider_credentials_present,
+            provider_is_usable,
+            provider_kwargs,
+        )
     except Exception:
         _log.warning("Provider registry import failed", exc_info=True)
         return None
@@ -120,28 +149,18 @@ def _resolve_provider_for_answer(repo_path: Path | None = None):
         os.environ.get("REPOWISE_DOC_MODEL") or os.environ.get("REPOWISE_MODEL") or persisted_model
     )
 
-    def _try(provider_name: str, **kwargs: Any):
+    def _try(provider_name: str, provider_model: str | None):
+        kwargs = provider_kwargs(
+            provider_name,
+            model=provider_model,
+            repo_path=repo_path,
+            getenv=_env,
+        )
         try:
             return get_provider(provider_name, **kwargs)
         except Exception:
             _log.warning("get_provider(%s) failed", provider_name, exc_info=True)
             return None
-
-    def _resolve_base_url(provider_name: str) -> str | None:
-        mapping = {
-            "openai": ["OPENAI_BASE_URL"],
-            "anthropic": ["ANTHROPIC_BASE_URL"],
-            "gemini": ["GEMINI_BASE_URL"],
-            "deepseek": ["DEEPSEEK_BASE_URL"],
-            "kimi": ["KIMI_BASE_URL"],
-            "ollama": ["OLLAMA_BASE_URL"],
-            "litellm": ["LITELLM_BASE_URL", "LITELLM_API_BASE"],
-        }
-        for env_var in mapping.get(provider_name, []):
-            val = _env(env_var)
-            if val:
-                return val
-        return None
 
     # Explicit selection wins — when its key is actually available. A
     # configured/persisted provider whose key is absent must NOT end
@@ -150,26 +169,9 @@ def _resolve_provider_for_answer(repo_path: Path | None = None):
     # (the auto-detect below was unreachable). Fall through instead, and
     # drop the persisted model on the way down — it belongs to the named
     # provider and would break a cross-provider fallback call.
-    _KEY_ENVS = {
-        "anthropic": ("ANTHROPIC_API_KEY",),
-        "openai": ("OPENAI_API_KEY",),
-        "deepseek": ("DEEPSEEK_API_KEY",),
-        "kimi": ("KIMI_API_KEY",),
-        "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    }
     if name:
-        key_envs = _KEY_ENVS.get(name)
-        key = next((v for v in map(_env, key_envs or ()) if v), None)
-        if key_envs is None or key:
-            kw: dict[str, Any] = {}
-            if model:
-                kw["model"] = model
-            if key:
-                kw["api_key"] = key
-            base_url = _resolve_base_url(name)
-            if base_url:
-                kw["base_url"] = base_url
-            provider = _try(name, **kw)
+        if provider_is_usable(name, _env):
+            provider = _try(name, model)
             if provider is not None:
                 return provider
         _log.warning(
@@ -180,50 +182,152 @@ def _resolve_provider_for_answer(repo_path: Path | None = None):
         if not (os.environ.get("REPOWISE_DOC_MODEL") or os.environ.get("REPOWISE_MODEL")):
             model = None  # persisted model was provider-specific
 
-    # Auto-detect from API keys.
-    if _env("ANTHROPIC_API_KEY"):
-        kw = {"api_key": _env("ANTHROPIC_API_KEY")}
-        if model:
-            kw["model"] = model
-        base_url = _resolve_base_url("anthropic")
-        if base_url:
-            kw["base_url"] = base_url
-        return _try("anthropic", **kw)
-    if _env("OPENAI_API_KEY"):
-        kw = {"api_key": _env("OPENAI_API_KEY")}
-        if model:
-            kw["model"] = model
-        base_url = _resolve_base_url("openai")
-        if base_url:
-            kw["base_url"] = base_url
-        return _try("openai", **kw)
-    if _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY"):
-        kw = {"api_key": _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY")}
-        if model:
-            kw["model"] = model
-        base_url = _resolve_base_url("gemini")
-        if base_url:
-            kw["base_url"] = base_url
-        return _try("gemini", **kw)
-    if _env("OLLAMA_BASE_URL"):
-        kw = {"base_url": _env("OLLAMA_BASE_URL")}
-        if model:
-            kw["model"] = model
-        return _try("ollama", **kw)
-    if _env("DEEPSEEK_API_KEY"):
-        kw = {"api_key": _env("DEEPSEEK_API_KEY")}
-        if model:
-            kw["model"] = model
-        base_url = _resolve_base_url("deepseek")
-        if base_url:
-            kw["base_url"] = base_url
-        return _try("deepseek", **kw)
-    if _env("KIMI_API_KEY"):
-        kw = {"api_key": _env("KIMI_API_KEY")}
-        if model:
-            kw["model"] = model
-        base_url = _resolve_base_url("kimi")
-        if base_url:
-            kw["base_url"] = base_url
-        return _try("kimi", **kw)
+    # Auto-detect from whatever credentials the environment carries. Only the
+    # keyed providers participate: a keyless one is "usable" everywhere, so
+    # auto-detecting it would hijack every repo that never configured it.
+    for candidate in PROVIDER_AUTODETECT_ORDER:
+        if candidate == name:
+            # Already attempted above with the same credentials. Retrying it
+            # here only differs in dropping the model, which cannot fix the
+            # reasons construction fails (a missing SDK, a rejected key), and
+            # it costs the next candidate its turn.
+            continue
+        if not provider_credentials_present(candidate, _env):
+            continue
+        provider = _try(candidate, model)
+        if provider is not None:
+            return provider
     return None
+
+
+def _usable_seconds(value: object) -> float | None:
+    """``value`` as a usable budget in seconds, clamped, or None if unusable.
+
+    Rejects bools (``float(True)`` would be a silent 1-second budget), NaN, and
+    anything non-positive. Infinity is clamped rather than rejected: it means
+    "no limit", and ``asyncio.wait_for`` honours that literally by never firing,
+    which is the one outcome this function exists to prevent.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if math.isnan(number) or number <= 0:
+        return None
+    return min(number, _MAX_TIMEOUT_S)
+
+
+def _synthesis_timeout(provider) -> float:
+    """Wall-clock budget for one synthesis call, in seconds.
+
+    Defaults to the provider's own ``interactive_timeout_s``. A remote API
+    answers in seconds, an agent-CLI subprocess or a local model needs minutes,
+    and a single hardcoded number cancels the second group on every call
+    (issue #1119). ``REPOWISE_ANSWER_TIMEOUT_S`` overrides it for the cases no
+    default can predict: a slow proxy, an overloaded self-hosted box, an agent
+    harness that would rather fail fast.
+
+    Every input here is untrusted. The env var is user-typed, and the provider
+    attribute belongs to a possibly runtime-registered class that need not
+    subclass BaseProvider, so a bad value must degrade to a working default
+    rather than raise out of a function whose caller is not expecting it to.
+    """
+    raw = (os.environ.get(_TIMEOUT_ENV) or "").strip()
+    if raw:
+        try:
+            override = _usable_seconds(float(raw))
+        except ValueError:
+            override = None
+        if override is not None:
+            return override
+        _log.warning("Ignoring unusable %s=%r", _TIMEOUT_ENV, raw)
+
+    declared = _usable_seconds(getattr(provider, "interactive_timeout_s", None))
+    return _FALLBACK_TIMEOUT_S if declared is None else declared
+
+
+def _synthesis_failure_note(exc: BaseException, provider, timeout_s: float, timed_out: bool) -> str:
+    """Human-readable ``note`` for a synthesis failure.
+
+    Names the provider and model that failed and, when we cancelled the call,
+    the budget it blew and the knob that raises it. The old note carried only
+    the exception class, which collapsed "your agent CLI needs 90s" and "your
+    key is rate limited" into an identical, unactionable ``TimeoutError``
+    (#1119).
+
+    ``timed_out`` is passed in rather than sniffed off ``exc``: builtin
+    ``TimeoutError`` is an ``OSError`` subclass and is what a bare socket
+    timeout raises, so type-testing would offer "raise your budget" for a
+    connection that died in ten seconds.
+    """
+    who = (
+        f"provider={getattr(provider, 'provider_name', None) or '?'}, "
+        f"model={getattr(provider, 'model_name', None) or '?'}"
+    )
+    if timed_out:
+        headroom = ""
+        if timeout_s < _MAX_TIMEOUT_S:
+            headroom = f" Raise it with {_TIMEOUT_ENV}=<seconds> (your MCP client's own tool timeout still applies), or"
+        return (
+            f"DEGRADED: LLM synthesis exceeded its {timeout_s:g}s budget ({who})."
+            f"{headroom} switch to a faster provider. Read the listed files to "
+            "answer meanwhile."
+        )
+    detail = " ".join(str(exc).split())[:200]
+    suffix = f": {detail}" if detail else ""
+    return (
+        f"DEGRADED: LLM synthesis failed ({type(exc).__name__}{suffix}) "
+        f"[{who}]. Read the listed files to answer."
+    )
+
+
+async def synthesize(provider, system_prompt: str, user_prompt: str) -> tuple[str, str | None]:
+    """Run one synthesis call. Returns ``(answer_text, failure_note)``.
+
+    ``failure_note`` is None on success. Owning the budget, the call and the
+    error message together is what keeps them consistent: the budget that
+    cancelled the call is the number the note quotes, and a caller cannot wire
+    up the call while forgetting the budget (which is how #1119 survived a
+    hardcoded 30s for as long as it did).
+    """
+    timeout_s = _synthesis_timeout(provider)
+
+    async def _generate() -> tuple[object | None, BaseException | None]:
+        """Swallow the provider's own errors so only our deadline escapes.
+
+        Without this, a provider raising builtin ``TimeoutError`` (which is
+        what a bare socket timeout raises, since it subclasses ``OSError``)
+        would be indistinguishable from the deadline we set, and the note would
+        tell the user to raise a budget that had nothing to do with it.
+        """
+        try:
+            return (
+                await provider.generate(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=_SYNTHESIS_MAX_TOKENS,
+                    temperature=_SYNTHESIS_TEMPERATURE,
+                ),
+                None,
+            )
+        except Exception as exc:
+            return None, exc
+
+    timed_out = False
+    try:
+        response, failure = await asyncio.wait_for(_generate(), timeout=timeout_s)
+    except TimeoutError as exc:
+        # Only wait_for can reach here now, so the label is earned.
+        timed_out = True
+        response, failure = None, exc
+    if failure is None:
+        return (getattr(response, "content", None) or "").strip(), None
+
+    _log.warning(
+        "get_answer LLM call failed (provider=%s, model=%s, budget=%.1fs, timed_out=%s): %s",
+        getattr(provider, "provider_name", "?"),
+        getattr(provider, "model_name", "?"),
+        timeout_s,
+        timed_out,
+        failure,
+    )
+    return "", _synthesis_failure_note(failure, provider, timeout_s, timed_out)

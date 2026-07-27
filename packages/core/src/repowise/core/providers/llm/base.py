@@ -165,6 +165,19 @@ class BaseProvider(ABC):
     - Raise RateLimitError on 429 responses after retries are exhausted
     """
 
+    # Wall-clock ceiling for ONE user-facing generate(), where somebody is
+    # waiting on the answer. Providers slower than a remote API must raise it:
+    # too low is not a slow answer, it is no answer, because the caller cancels
+    # mid-flight (#1119, where every codex_cli synthesis died at a flat 30s).
+    #
+    # 60s, not 30s: a remote API answered a question-shaped prompt in 4.8-8.7s
+    # across the only latency profile we have (n=6, one provider), which is too
+    # thin a sample to price a hard ceiling off, and a reasoning model behind
+    # the same API blows straight through 30s. 60s still sits under the tool
+    # timeout every MCP client imposes, so the extra headroom costs nothing but
+    # a longer wait on calls that were going to fail regardless.
+    interactive_timeout_s: float = 60.0
+
     @abstractmethod
     async def generate(
         self,

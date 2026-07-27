@@ -142,6 +142,11 @@ class OllamaProvider(BaseProvider):
                       concurrent requests against a resource-constrained machine).
     """
 
+    # Generation speed here is the user's own hardware, and a cold model pays
+    # a load from disk on top. Two minutes covers a mid-size local model on a
+    # laptop; the 30s default cancels one before it finishes warming up.
+    interactive_timeout_s: float = 120.0
+
     def __init__(
         self,
         model: str = "llama3.2",

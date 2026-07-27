@@ -140,6 +140,10 @@ class LiteLLMProvider(BaseProvider):
         rate_limiter: Optional RateLimiter instance.
     """
 
+    # The backend behind the proxy is unknown and routinely a self-hosted or
+    # local model, so budget for the slow case rather than assume a fast one.
+    interactive_timeout_s: float = 120.0
+
     def __init__(
         self,
         model: str,

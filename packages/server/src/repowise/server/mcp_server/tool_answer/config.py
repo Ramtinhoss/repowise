@@ -452,6 +452,12 @@ _STOPWORDS = frozenset(
 # gets truncated; the agent can call get_symbol for the full body.
 _MAX_RICH_SIG_LINES = 4
 
+# Synthesis sampling. Answers target 150-400 words (~550 tokens), so the cap is
+# headroom rather than the binding constraint; generation speed is. Temperature
+# is low because the answer must track the retrieved excerpts, not embellish.
+_SYNTHESIS_MAX_TOKENS = 1024
+_SYNTHESIS_TEMPERATURE = 0.2
+
 _SYSTEM_PROMPT = (
     "You are a code-aware retrieval assistant. You are given a developer "
     "question plus excerpts from a project wiki — file summaries, symbol "

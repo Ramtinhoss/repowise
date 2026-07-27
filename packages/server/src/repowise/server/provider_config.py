@@ -110,7 +110,10 @@ PROVIDER_CATALOG: list[dict[str, Any]] = [
         "name": "LiteLLM",
         "default_model": "groq/llama-3.1-70b-versatile",
         "models": ["groq/llama-3.1-70b-versatile"],
-        "env_keys": [],
+        # Was [] while requires_key stayed True, so _get_key_for_provider had
+        # nothing to look at and litellm read as unconfigured no matter what
+        # the user had set. The name matches the CLI's own validation map.
+        "env_keys": ["LITELLM_API_KEY"],
         "requires_key": True,
     },
     {
@@ -175,17 +178,6 @@ def _save_config(config: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-_BASE_URL_ENV_VARS = {
-    "anthropic": ["ANTHROPIC_BASE_URL"],
-    "openai": ["OPENAI_BASE_URL"],
-    "gemini": ["GEMINI_BASE_URL"],
-    "ollama": ["OLLAMA_BASE_URL"],
-    "deepseek": ["DEEPSEEK_BASE_URL"],
-    "kimi": ["KIMI_BASE_URL"],
-    "litellm": ["LITELLM_BASE_URL", "LITELLM_API_BASE"],
-}
-
-
 def _load_repo_context(repo_path: str | Path | None) -> tuple[dict[str, Any], dict[str, str]]:
     """Load a repo's ``config.yaml`` dict and ``.env`` dict for resolution.
 
@@ -247,8 +239,13 @@ def _get_base_url_for_provider(
     local LiteLLM/OpenAI-compatible endpoint configured at init is reused by
     chat. The repo ``config.yaml`` may carry it under a per-provider section,
     e.g. ``openai: {base_url: http://localhost:4000/v1}``.
+
+    The env-var names come from the provider registry, the same table the CLI
+    and MCP resolvers read, so this cannot drift out of step with them.
     """
-    env_vars = _BASE_URL_ENV_VARS.get(provider_id, [])
+    from repowise.core.providers.llm.registry import PROVIDER_BASE_URL_ENVS
+
+    env_vars = PROVIDER_BASE_URL_ENVS.get(provider_id, ())
     for env_var in env_vars:
         val = os.environ.get(env_var)
         if val:

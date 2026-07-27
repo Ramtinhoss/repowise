@@ -495,6 +495,7 @@ The `.repowise/.env` file is gitignored automatically.
 | `REPOWISE_MODEL` | Override model |
 | `REPOWISE_DOC_MODEL` | Override the model used for `get_answer` synthesis specifically |
 | `REPOWISE_REASONING` | Override `reasoning` (see valid values above) |
+| `REPOWISE_ANSWER_TIMEOUT_S` | Seconds `get_answer` waits for synthesis before giving up. Defaults to a per-provider budget: 60s for the remote API providers, 120s for `ollama` and `litellm`, 180s for `codex_cli` and `opencode`. Raise it if your model is slower than its class suggests, lower it if you would rather an agent fail fast than block. Capped at 600s. Note your MCP client enforces its own tool timeout underneath this one, so setting a value above it produces a client-side error instead of repowise's diagnosable "synthesis exceeded its budget" response |
 
 ### Embeddings
 

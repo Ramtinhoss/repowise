@@ -351,6 +351,13 @@ class CodexCliProvider(BaseProvider):
             serializes subprocess calls by default.
     """
 
+    # A process spawn plus a full Codex agent turn. The floor is tens of
+    # seconds even for a short prompt, so an interactive caller has to budget
+    # in minutes or it cancels every call it ever makes (#1119). Stays under
+    # _EXEC_TIMEOUT_SECONDS so the caller gives up before the subprocess does
+    # and the error names the real cause.
+    interactive_timeout_s: float = 180.0
+
     def __init__(
         self,
         model: str | None = None,
