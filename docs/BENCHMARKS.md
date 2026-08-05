@@ -175,6 +175,13 @@ them.
 | Graphify | 10 | 5,482 | 3 / 15 | 2,878 | 0.0% | 7 of 15 | 1.000 |
 | *bare agent (control)* | 0 | 0 | n/a | 2,877 | baseline | n/a | n/a |
 
+**Read the "agent used it" column with care, including our own 15 of 15.** We
+ran this arm twice more on later days, changing nothing, and it came back **4 of
+15 and then 3 of 15**. CodeGraph's 13 of 15 came back 2 of 14. This column is
+the least stable number on the page and the row above is one day's draw of it,
+not a property of the tool. Why, and what it does to the claim, is in
+[what we will not claim](#what-we-will-not-claim-from-this-run) below.
+
 ### Under Codex (`gpt-5.6-sol`), same servers, same questions, same indexes
 
 | Tool | Agent used it | Output tokens | vs bare agent | Leaner on | p |
