@@ -42,6 +42,10 @@ That is also why this page prints n beside every mean, states which tool
 produced each number, and publishes the rows we lose. It is built to survive a
 rerun, because in this field that is the only property that turns out to matter.
 
+So we reran our own headline ourselves, on a second agent harness, and published
+what came back. It moved a number we had been quoting, and section 2 now
+carries both results and the correction.
+
 ## What we measured, and against whom
 
 repowise builds [five intelligence layers](layers/INTELLIGENCE_LAYERS.md) from
@@ -51,7 +55,7 @@ overlap on different layers, and this table says exactly which.
 | Layer | Measured against | Result |
 |---|---|---|
 | Finding the right files | CodeGraph, Graphify, code-review-graph | [§1](#1-finding-the-right-files) **we win**, n=42 held out, p=0.00004 |
-| Work saved in a real agent loop | CodeGraph, Serena, Graphify, code-review-graph, bare agent | [§2](#2-what-changes-in-a-real-agent-loop) **we win**, n=15, p=0.035, and the only tool in the field to reach significance |
+| Work saved in a real agent loop | CodeGraph, Serena, Graphify, code-review-graph, bare agent | [§2](#2-what-changes-in-a-real-agent-loop) **we win on both agent harnesses we tried**, n=15 each, p=0.035 on Claude Code and p=0.001 on Codex, and the only tool to clear the bar on both |
 | Loading one commit's context | naive file reads, `git diff` | [§3](#3-loading-one-commits-context-the-easy-number) **35.6x** fewer tokens than naive |
 | Command-output compression | no comparable tool in the field | [§4](#4-command-output-compression) |
 | Code health and defect prediction | CodeScene | [§5](#5-code-health-predicts-defects) **we win**, p=0.003 |
@@ -155,6 +159,13 @@ Two things have to be true for a tool to be worth mounting. The agent has to
 actually call it, and the loop has to get leaner when it does. One table, both
 questions.
 
+We ran it twice, on two different agent harnesses, because the first answer
+turned out to depend on the harness more than on the tools. Both runs are here.
+They are deliberately separate tables and no number should be carried between
+them.
+
+### Under Claude Code (`claude-sonnet-5`)
+
 | Tool | Tools advertised | Schema cost (chars) | Agent used it | Output tokens | vs bare agent | Leaner on | p |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | **repowise** | 10 | 17,561 | **15 / 15** | **2,420** | **-15.9%** | **12 of 15** | **0.035** |
@@ -164,16 +175,43 @@ questions.
 | Graphify | 10 | 5,482 | 3 / 15 | 2,878 | 0.0% | 7 of 15 | 1.000 |
 | *bare agent (control)* | 0 | 0 | n/a | 2,877 | baseline | n/a | n/a |
 
-**repowise is the only tool in this field whose reduction is large enough to
-rule out chance.**
+### Under Codex (`gpt-5.6-sol`), same servers, same questions, same indexes
 
-### How to read that table
+| Tool | Agent used it | Output tokens | vs bare agent | Leaner on | p |
+|---|---:|---:|---:|---:|---:|
+| **repowise** | **15 / 15** | **1,165** | **-34.9%** | **14 of 15** | **0.001** |
+| code-review-graph | **15 / 15** | 1,488 | -16.9% | 13 of 15 | 0.002 |
+| Serena | **15 / 15** | 1,505 | -15.9% | 12 of 15 | 0.011 |
+| CodeGraph | **15 / 15** | 1,522 | -15.0% | 11 of 15 | 0.048 |
+| Graphify | **15 / 15** | 1,593 | -11.0% | 12 of 15 | 0.095 |
+| *bare agent (control)* | 0 / 15 | 1,790 | baseline | n/a | n/a |
+
+**Every tool got called on every question here, including the two that were
+nearly ignored under Claude Code, and nothing changed on any vendor's side
+between the two runs.** Claude Code loads MCP tool schemas on demand, so an agent
+has to go looking before it can call anything and frequently never does. Codex
+mounts them up front. That single difference moved code-review-graph from 0 of
+15 to 15 of 15 and Serena from 4 of 15 to 15 of 15.
+
+**repowise is the only tool whose token reduction clears the bar on both
+harnesses.** On Codex, where every tool is genuinely being exercised, the gap
+widens rather than closes: correcting for the five comparisons in that table,
+only repowise and code-review-graph survive, and repowise's reduction is double
+the next tool's.
+
+The mechanism shows up directly in the call counts rather than being inferred.
+On Codex the repowise agent made **3.4 tool calls against the bare agent's 7.1**,
+almost all of the difference being shell commands it no longer had to run.
+
+### How to read those tables
 
 **Agent used it** counts the questions where the agent made at least one call the
 server actually answered. A tool the agent never reaches for is not a tool it
 has, whatever the feature list says. code-review-graph advertises 30 tools over
-a built, embedded graph of 40,904 nodes and 380,168 edges, and across 15
-questions the agent never called it once.
+a built, embedded graph of 40,904 nodes and 380,168 edges, and under Claude Code
+the agent never called it once across 15 questions. Under Codex it called it on
+all 15. **That number is a fact about the pairing of tool and harness, not about
+the tool**, which is why it appears twice above and never as a single figure.
 
 **Output tokens** is how much the agent itself writes to reach an answer: its
 reasoning, its tool calls, its final reply. Lower means it went in a straighter
@@ -195,9 +233,10 @@ Dollar cost per question is the number every tool in this category wants to
 quote, and it is close to meaningless as a measure of a tool. Here is the control
 that convinced us, run in our own harness.
 
-**code-review-graph never called its server across all 15 questions.** It is
-behaviourally identical to the bare agent, carrying an extra 28,118 characters of
-tool schema that should make it cost *more*. Measured on dollars, it came out
+**Under Claude Code, code-review-graph never called its server across all 15
+questions.** It is behaviourally identical to the bare agent, carrying an extra
+28,118 characters of tool schema that should make it cost *more*. Measured on
+dollars, it came out
 **43% cheaper than the bare agent**. A tool that did nothing produced a
 best-in-class saving.
 
@@ -248,29 +287,46 @@ it.
 
 ### What we will not claim from this run
 
-- **Not a quality win, and not quality parity either.** A blind judge scored
-  repowise best in the field at +0.13 against the bare agent, with CodeGraph at
-  -0.41 and Serena at -0.44. But the judge's two graders disagree with each other
-  by 0.46 points on the *same* answers, which is larger than every per-arm effect
-  in the run. The instrument cannot resolve differences this small, so the
-  quality column is decoration, not evidence. "No significant difference" is not
-  parity, and an equivalence claim needs a TOST we have not run.
+- **Not a quality win, and not quality parity either.** On Claude Code a blind
+  judge scored repowise best in the field at +0.13 against the bare agent. On
+  Codex, where every tool was actually used, **every tool including ours scored
+  slightly below the bare agent, and repowise came last of the five at -0.35.**
+  None of that is significant either way: the whole spread across all six arms
+  is 0.38 points, and we measured the run-to-run noise of this benchmark at
+  **0.69 points** by repeating an identical run and watching the answer move.
+  The instrument cannot resolve differences this small, so the quality column is
+  decoration on both harnesses. "No significant difference" is not parity, and
+  an equivalence claim needs a TOST we have not run.
+- **The two quality columns cannot be compared with each other.** They were
+  graded by different judges, because grading a model with a judge from its own
+  family is a known bias and avoiding it means the judge changes when the agent
+  does. So no quality number here may be subtracted from one in the other table.
 - **Not a universal saving.** This is n=15 on one repository, at one commit,
-  under one prompt and one model. All four move the number. Treat -15.9% as this
-  configuration's result, not a constant.
-- **Adoption is a design result, not a retrieval result.** It measures whether we
-  named and shaped our tools so an agent reaches for them, which is a real skill
-  and a real advantage, and it says nothing about the quality of what comes back.
-  Note it is clearly **not** ordered by surface size: we serve 10 tools and get
-  called 15 of 15, CodeGraph serves 1 and gets called 13, Serena serves 29 and
-  gets called 4.
+  under one prompt. Two harnesses now, which is two more than most published
+  numbers in this category, and still not a constant. Treat each figure as that
+  configuration's result.
+- **Adoption is not a stable property of a tool.** We used to read the "agent
+  used it" column as a design result about how well we had named and shaped our
+  tools. It does not support that. Repeating the Claude Code run with nothing
+  changed on anyone's side moved us from 15 of 15 to 4 of 15 to 3 of 15, and
+  CodeGraph from 13 of 15 to 2 of 14. Switching harness moved every tool in the
+  field to 15 of 15. **Whether an agent calls a codebase server at all depends
+  more on the harness than on the server.** Any adoption figure, ours included,
+  is only meaningful with its harness and its date attached.
 
-### What producing this table cost
+### What producing these tables cost
 
-6 tools x 15 questions = **90 agent runs, 0 errors, $18.77** of API spend over
-**106 minutes**. Every tool was given a fresh index built from scratch on the
-same pinned commit, **11.3 minutes of indexing** in total: repowise 363.6s,
-Graphify 102.7s, code-review-graph 54.3s, CodeGraph 15.6s.
+6 tools x 15 questions x 2 harnesses = **180 agent runs, 0 errors.** The Claude
+Code run cost **$18.77** over 106 minutes; the Codex run **$6.08** over 101
+minutes. Every tool was given a fresh index built from scratch on the same
+pinned commit, **11.3 minutes of indexing** in total: repowise 363.6s,
+Graphify 102.7s, code-review-graph 54.3s, CodeGraph 15.6s. The two runs reused
+the same indexes, so the second bought a whole second harness for the price of
+the agent time.
+
+Those two dollar figures are not comparable and are given only as what each run
+cost us to produce. Claude Code reports its own spend; Codex reports token
+counts and no cost, so its figure is computed from published list rates.
 
 Raw data:
 **[bakeoff\_2026\_08/rung6](https://github.com/repowise-dev/repowise-bench/tree/master/results/bakeoff_2026_08/rung6)**
