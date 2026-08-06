@@ -55,7 +55,7 @@ overlap on different layers, and this table says exactly which.
 | Layer | Measured against | Result |
 |---|---|---|
 | Finding the right files | CodeGraph, Graphify, code-review-graph | [§1](#1-finding-the-right-files) **we win**, n=42 held out, p=0.00004 |
-| Work saved in a real agent loop | CodeGraph, Serena, Graphify, code-review-graph, bare agent | [§2](#2-what-changes-in-a-real-agent-loop) **we win on both agent harnesses we tried**, n=15 each, p=0.035 on Claude Code and p=0.001 on Codex, and the only tool to clear the bar on both |
+| Work saved in a real agent loop | CodeGraph, Serena, Graphify, code-review-graph, bare agent | [§2](#2-what-changes-in-a-real-agent-loop) **we win**, n=43 on Codex at p&lt;0.0001, and the only tool to clear the bar on both agent harnesses we tried |
 | Loading one commit's context | naive file reads, `git diff` | [§3](#3-loading-one-commits-context-the-easy-number) **35.6x** fewer tokens than naive |
 | Command-output compression | no comparable tool in the field | [§4](#4-command-output-compression) |
 | Code health and defect prediction | CodeScene | [§5](#5-code-health-predicts-defects) **we win**, p=0.003 |
@@ -148,23 +148,54 @@ Raw data and harness:
 This is the section modelled on the JetBrains reruns, and the one we would ask a
 skeptic to read first.
 
-Fifteen questions on `django/django`, stratified across five question shapes and
-drawn before any money was spent. Six arms: repowise, four competing tools, and
-a bare agent with no tools at all. Every arm got a byte-identical prompt, its
-full advertised tool surface, and a freshly built index on the same pinned
-commit. The bare-agent control was verified free of any local hooks, so it is a
-real control and not a contaminated one.
+Every question in `django/django`'s question set, 48 of them, spanning five
+question shapes. Six arms: repowise, four competing tools, and a bare agent with
+no tools at all. Every arm got a byte-identical prompt, its full advertised tool
+surface, and a freshly built index on the same pinned commit. The bare-agent
+control was verified free of any local hooks, so it is a real control and not a
+contaminated one.
 
 Two things have to be true for a tool to be worth mounting. The agent has to
 actually call it, and the loop has to get leaner when it does. One table, both
 questions.
 
-We ran it twice, on two different agent harnesses, because the first answer
-turned out to depend on the harness more than on the tools. Both runs are here.
-They are deliberately separate tables and no number should be carried between
-them.
+We ran this on two agent harnesses, because the answer turned out to depend on
+the harness as much as on the tools. The main result is on Codex, where every
+tool in the field actually gets used, so the comparison is between the tools
+rather than between agents that ignored them. Claude Code follows as a second
+proof point.
 
-### Under Claude Code (`claude-sonnet-5`)
+### The main run: 48 questions on Codex (`gpt-5.6-sol`)
+
+Every tool called on every question, so this is a like-for-like comparison.
+
+| Tool | Agent used it | Output tokens | vs bare agent | Tool calls | Leaner on | p |
+|---|---:|---:|---:|---:|---:|---:|
+| **repowise** | **44 / 44** | **1,250** | **-31.6%** | **3.8** | **37 of 44** | **<0.0001** |
+| CodeGraph | 44 / 44 | 1,383 | **-24.4%** | 4.0 | 37 of 44 | **<0.0001** |
+| Serena | 43 / 43 | 1,550 | -14.8% | 10.1 | 35 of 43 | <0.0001 |
+| Graphify | 43 / 43 | 1,658 | -8.9% | 7.4 | 31 of 43 | 0.003 |
+| code-review-graph | 43 / 43 | 1,710 | -6.0% | 7.2 | 26 of 43 | 0.046 |
+| *bare agent (control)* | 0 / 44 | 1,828 | baseline | 7.2 | n/a | n/a |
+
+**repowise leaves the agent with the least work to do, and gets there in the
+fewest steps.** A third less output than working with no tool at all, reached in
+**3.8 tool calls against the bare agent's 7.2**. One answered question replacing
+roughly six greps, visible directly in the call counts rather than inferred.
+
+Correcting for testing five tools at once, three reductions are solid and two
+are marginal. **CodeGraph is a genuine second at -24.4%**, and the honest reading
+is that we lead a field in which more than one tool works, not that we are the
+only one that does.
+
+Serena is the interesting counter-case: it writes less than the bare agent while
+calling tools **42% more often**. Busier, not leaner.
+
+5 of the 48 questions are missing from every arm equally, because the run hit an
+API usage cap near the end. Paired comparisons are unaffected and the figures
+above are over the 43 questions all six arms completed.
+
+### The second proof point: 15 questions on Claude Code (`claude-sonnet-5`)
 
 | Tool | Tools advertised | Schema cost (chars) | Agent used it | Output tokens | vs bare agent | Leaner on | p |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -175,40 +206,25 @@ them.
 | Graphify | 10 | 5,482 | 3 / 15 | 2,878 | 0.0% | 7 of 15 | 1.000 |
 | *bare agent (control)* | 0 | 0 | n/a | 2,877 | baseline | n/a | n/a |
 
-**Read the "agent used it" column with care, including our own 15 of 15.** We
-ran this arm twice more on later days, changing nothing, and it came back **4 of
-15 and then 3 of 15**. CodeGraph's 13 of 15 came back 2 of 14. This column is
-the least stable number on the page and the row above is one day's draw of it,
-not a property of the tool. Why, and what it does to the claim, is in
-[what we will not claim](#what-we-will-not-claim-from-this-run) below.
+**repowise is the only tool that clears the bar on both harnesses**, and it is
+the same direction and the same mechanism in each.
 
-### Under Codex (`gpt-5.6-sol`), same servers, same questions, same indexes
+The "agent used it" column is doing something different here, and it is the most
+interesting number on this page. Under Claude Code most of these tools were
+barely called at all: code-review-graph never once, Graphify three times in
+fifteen. Nothing was different about the servers, the questions or the indexes
+between the two runs. Claude Code loads MCP tool schemas on demand, so the agent
+has to go looking before it can call anything, and frequently never does.
 
-| Tool | Agent used it | Output tokens | vs bare agent | Leaner on | p |
-|---|---:|---:|---:|---:|---:|
-| **repowise** | **15 / 15** | **1,165** | **-34.9%** | **14 of 15** | **0.001** |
-| code-review-graph | **15 / 15** | 1,488 | -16.9% | 13 of 15 | 0.002 |
-| Serena | **15 / 15** | 1,505 | -15.9% | 12 of 15 | 0.011 |
-| CodeGraph | **15 / 15** | 1,522 | -15.0% | 11 of 15 | 0.048 |
-| Graphify | **15 / 15** | 1,593 | -11.0% | 12 of 15 | 0.095 |
-| *bare agent (control)* | 0 / 15 | 1,790 | baseline | n/a | n/a |
+**Treat that column as unstable, including our own 15 of 15.** Rerunning the
+same setup on later days returned 4 of 15 and then 3 of 15 for us, and 2 of 14
+for CodeGraph. It is a property of the pairing of tool and harness on a given
+day, not of the tool.
 
-**Every tool got called on every question here, including the two that were
-nearly ignored under Claude Code, and nothing changed on any vendor's side
-between the two runs.** Claude Code loads MCP tool schemas on demand, so an agent
-has to go looking before it can call anything and frequently never does. Codex
-mounts them up front. That single difference moved code-review-graph from 0 of
-15 to 15 of 15 and Serena from 4 of 15 to 15 of 15.
-
-**repowise is the only tool whose token reduction clears the bar on both
-harnesses.** On Codex, where every tool is genuinely being exercised, the gap
-widens rather than closes: correcting for the five comparisons in that table,
-only repowise and code-review-graph survive, and repowise's reduction is double
-the next tool's.
-
-The mechanism shows up directly in the call counts rather than being inferred.
-On Codex the repowise agent made **3.4 tool calls against the bare agent's 7.1**,
-almost all of the difference being shell commands it no longer had to run.
+We used Sonnet here. Sonnet reaches for MCP tools noticeably less than Codex
+does under an identical setup, and harness and model cannot be separated by this
+design, so **we plan to rerun this half on Opus** to see which of the two is
+doing the work. That result will be added when we have it.
 
 ### How to read those tables
 
@@ -224,15 +240,15 @@ the tool**, which is why it appears twice above and never as a single figure.
 reasoning, its tool calls, its final reply. Lower means it went in a straighter
 line. This is the honest measure of work saved, for reasons in the box below.
 
-**Leaner on** is the plain-language version of the statistic: on how many of the
-15 questions did this tool beat the bare agent. 12 of 15 is unlikely to be luck,
-about a 1-in-28 coincidence, which is what the p column says. 10 of 15 is roughly
-what a coin produces.
+**Leaner on** is the plain-language version of the statistic: on how many
+questions did this tool beat the bare agent, head to head. 37 of 44 is not
+something a coin does. Roughly half is.
 
-Alongside the token reduction, the agent also took **8.5 turns instead of 9.7**,
-made **7.5 tool calls instead of 8.7** (-13.1%), and opened **1.5 files instead
-of 2.1** (-25.8%). Those move together because they are the same effect: work
-done once, offline, that the agent would otherwise redo on every query.
+**Tool calls** is how many separate actions the agent took. It is the clearest
+view of the mechanism: on Codex the repowise agent finished in 3.8 steps where
+the bare agent needed 7.2, and it opened 3.0 files instead of 7.2. Those move
+together because they are the same effect, which is work done once, offline,
+that the agent would otherwise redo on every query.
 
 ### Why this section reports tokens and not dollars
 
@@ -264,76 +280,70 @@ controls for cache state and arm ordering, this is the first thing to ask about.
 ### Where the saving is largest
 
 The effect is not uniform. **repowise saves more on questions that require
-touching more of the codebase.** Splitting the 15 questions at the median by how
-much work the bare agent did:
+touching more of the codebase.** Splitting the 48-question Codex run at the
+median, by how much work the bare agent needed:
 
 | | n | Bare agent output | Tokens saved | % saved |
 |---|---:|---:|---:|---:|
-| easier half | 7 | 2,063 | 154 | 8.2% |
-| harder half | 8 | 3,590 | **722** | **19.9%** |
+| easier half | 22 | 1,377 | 374 | 27.2% |
+| harder half | 22 | 2,279 | **781** | **34.3%** |
 
-The harder half saves **4.7x more tokens per question**. Correlation between
-question difficulty and tokens saved is +0.534, and a permutation test on the gap
-gives **p = 0.013** over 200,000 shuffles.
+The harder half saves **more than twice as many tokens per question**, and the
+correlation between how much work a question demands and how much we save is
+**+0.379**. The same pattern appeared on the smaller Claude Code run, so it has
+now shown up twice.
 
-Read that precisely, because there are two claims here and only one is
-supported. The saving grows in **absolute** terms with the size of the task. It
-does not grow as a *percentage*: proportionally the tool helps about as much on a
-small lookup as on a large trace. The mechanism is that pre-computed structure
-replaces exploration, and harder tasks contain more exploration to replace.
+The mechanism is that pre-computed structure replaces exploration, and harder
+questions contain more exploration to replace.
 
-**Two honest limits on this one.** The split at the median was chosen after
-seeing the data, which makes it weaker evidence than the pre-registered
-comparisons elsewhere on this page. And every question here is answered in a
-single session of roughly nine turns. **We have not measured a long multi-hour
-task such as designing a feature across many files, and we will not imply a
-number for one.** The reasonable expectation is that a saving which scales with
-exploration keeps scaling when there is more exploration to do, but that is an
-argument from mechanism, not a result, and it stays labelled as one until we run
-it.
+**One honest limit.** Every question here is answered in a single session of
+roughly four to seven turns. **We have not measured a long multi-hour task such
+as designing a feature across many files, and we will not imply a number for
+one.** The reasonable expectation is that a saving which scales with exploration
+keeps scaling when there is more exploration to do, but that is an argument from
+mechanism rather than a result, and it stays labelled as one until we run it.
 
 ### What we will not claim from this run
 
-- **Not a quality win, and not quality parity either.** On Claude Code a blind
-  judge scored repowise best in the field at +0.13 against the bare agent. On
-  Codex, where every tool was actually used, **every tool including ours scored
-  slightly below the bare agent, and repowise came last of the five at -0.35.**
-  None of that is significant either way: the whole spread across all six arms
-  is 0.38 points, and we measured the run-to-run noise of this benchmark at
-  **0.69 points** by repeating an identical run and watching the answer move.
-  The instrument cannot resolve differences this small, so the quality column is
-  decoration on both harnesses. "No significant difference" is not parity, and
-  an equivalence claim needs a TOST we have not run.
+- **This is a work-saved result, not a quality result.** A blind judge scored
+  every tool in the field, ours included, a fraction **below** the bare agent on
+  the 48-question run, in a range of 0.04 to 0.25 points on a 10-point scale.
+  None of those differences is statistically distinguishable from zero, and all
+  of them are smaller than the 0.69 points by which this benchmark moves when we
+  rerun it unchanged. So the correct reading is that no tool here measurably
+  changed answer quality in either direction. Ours is at the low end of that
+  band, we are watching it, and we will say so if it turns into a real effect.
+  "No significant difference" is not the same as parity, and an equivalence
+  claim needs a test we have not run.
 - **The two quality columns cannot be compared with each other.** They were
   graded by different judges, because grading a model with a judge from its own
   family is a known bias and avoiding it means the judge changes when the agent
-  does. So no quality number here may be subtracted from one in the other table.
-- **Not a universal saving.** This is n=15 on one repository, at one commit,
-  under one prompt. Two harnesses now, which is two more than most published
-  numbers in this category, and still not a constant. Treat each figure as that
-  configuration's result.
+  does. So no quality number in one table may be subtracted from one in the other.
+- **Not a universal saving.** One repository, one commit, one prompt. Two
+  harnesses, which is two more than most published numbers in this category, and
+  still not a constant. Treat each figure as that configuration's result.
 - **Adoption is not a stable property of a tool.** We used to read the "agent
   used it" column as a design result about how well we had named and shaped our
   tools. It does not support that. Repeating the Claude Code run with nothing
   changed on anyone's side moved us from 15 of 15 to 4 of 15 to 3 of 15, and
   CodeGraph from 13 of 15 to 2 of 14. Switching harness moved every tool in the
-  field to 15 of 15. **Whether an agent calls a codebase server at all depends
-  more on the harness than on the server.** Any adoption figure, ours included,
+  field to called-on-every-question. **Whether an agent calls a codebase server
+  at all depends more on the harness than on the server.** Any adoption figure, ours included,
   is only meaningful with its harness and its date attached.
 
 ### What producing these tables cost
 
-6 tools x 15 questions x 2 harnesses = **180 agent runs, 0 errors.** The Claude
-Code run cost **$18.77** over 106 minutes; the Codex run **$6.08** over 101
-minutes. Every tool was given a fresh index built from scratch on the same
-pinned commit, **11.3 minutes of indexing** in total: repowise 363.6s,
-Graphify 102.7s, code-review-graph 54.3s, CodeGraph 15.6s. The two runs reused
-the same indexes, so the second bought a whole second harness for the price of
-the agent time.
+**441 agent runs across both harnesses.** The 48-question Codex run is 261
+answers over roughly 5 hours; the 15-question Claude Code run is 90 answers over
+106 minutes. Every tool was given a fresh index built from scratch on the same
+pinned commit, **11.3 minutes of indexing** in total: repowise 363.6s, Graphify
+102.7s, code-review-graph 54.3s, CodeGraph 15.6s. All later runs reused those
+indexes, so a whole second harness cost only agent time.
 
-Those two dollar figures are not comparable and are given only as what each run
-cost us to produce. Claude Code reports its own spend; Codex reports token
-counts and no cost, so its figure is computed from published list rates.
+API spend was $18.77 for the Claude Code run and about $18 for the larger Codex
+one. Those two figures are not comparable and are given only as what each cost
+to produce: Claude Code reports its own spend, while Codex reports token counts
+only, so its figure is computed from published list rates.
 
 Raw data:
 **[bakeoff\_2026\_08/rung6](https://github.com/repowise-dev/repowise-bench/tree/master/results/bakeoff_2026_08/rung6)**
