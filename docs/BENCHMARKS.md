@@ -79,10 +79,12 @@ This section measures only that.
 number**, which makes it the most reproducible result on the page. ContextBench
 ships gold file spans; a tool either returns them or it does not.
 
-The 112 instances were split into a 70-instance development half and a
-42-instance **sealed** half, **pinned by instance id before any of this work
-started**. All development uses the 70. **Every number in the table below comes
-from the sealed 42**, which is the whole reason it is worth reading.
+**Every number below comes from instances that no development work has ever
+seen.** The 112 instances were split into 70 and 42 by instance id, **pinned
+before any of this work started**, and the 42 were kept sealed and untouched
+until the final measurement. That split is the point of this section: a
+retrieval number measured on the instances you tuned against is not worth
+printing, so we did not print one.
 
 ### The numbers, on the 42 sealed instances
 
@@ -104,26 +106,32 @@ list of ~19 files. `search_codebase` finds fewer but is the most efficient per
 file served: **0.742 from 8.2 files**, better coverage-per-file than anything
 else in the table. If you are paying by the token, that is the row to read.
 
-### The development half, for comparison
+### Why this is not a tuned-to-the-benchmark number
 
-All development work happens on the other 70 instances. Those are not the
-headline and never will be, but the numbers are worth printing beside the sealed
-ones:
+The obvious objection to any retrieval result is that the tool was shaped around
+the questions. Here is the evidence against it, and it is the strongest form
+available: **the unseen half scores higher than the half we developed on.**
 
-| | development half (n=70) | **sealed half (n=42)** |
+| | half used in development (n=70) | **sealed half (n=42)** |
 |---|---:|---:|
 | repowise (`get_answer`) | 0.810 | **0.876** |
 | repowise (`search_codebase`) | 0.684 | 0.742 |
 | CodeGraph | **0.6093** | **0.6095** |
 
-**CodeGraph scores the same on both halves to three decimal places**, which is
-how we know neither half is the easy one. Our own results are slightly stronger
-on the sealed half than on the development half.
+Two things fall out of that table.
+
+**CodeGraph scores the same on both halves to three decimal places.** It had no
+development done against either, so it acts as a ruler: the two halves are
+equally hard, and any gap between them is about the tool rather than about the
+questions.
+
+**Overfitting makes the unseen half score worse. Ours scores better**, on both
+tools, by a wider margin than the halves differ for anyone else. Whatever the
+development work changed, it generalised.
 
 **We do not quote a pooled 112-instance figure**, though it is easy to compute
-and would be 0.835. The two halves answer different questions and averaging them
-loses the only one that matters, which is how the tool does on instances no
-development work has ever seen.
+and would be 0.835. Averaging the two halves loses the only number that matters,
+which is how the tool does on instances it has never seen.
 
 ### What it cost to produce
 
@@ -333,20 +341,44 @@ mechanism rather than a result, and it stays labelled as one until we run it.
 
 ### What producing these tables cost
 
-**441 agent runs across both harnesses.** The 48-question Codex run is 261
-answers over roughly 5 hours; the 15-question Claude Code run is 90 answers over
-106 minutes. Every tool was given a fresh index built from scratch on the same
-pinned commit, **11.3 minutes of indexing** in total: repowise 363.6s, Graphify
-102.7s, code-review-graph 54.3s, CodeGraph 15.6s. All later runs reused those
-indexes, so a whole second harness cost only agent time.
+**471 agent runs, about 13 hours of machine time, roughly $44 of API spend.**
 
-API spend was $18.77 for the Claude Code run and about $18 for the larger Codex
-one. Those two figures are not comparable and are given only as what each cost
-to produce: Claude Code reports its own spend, while Codex reports token counts
-only, so its figure is computed from published list rates.
+| | runs | wall clock | API spend |
+|---|---:|---:|---:|
+| Codex, 48 questions x 6 tools | 261 | 4.9h | $17.62 |
+| Codex, earlier 15-question run | 90 | 1.7h | $6.08 |
+| Codex, proof-of-life checks and a second language | 30 | 0.5h | $1.58 |
+| Claude Code, 15 questions x 6 tools | 90 | 1.8h | $18.77 |
 
-Raw data:
-**[bakeoff\_2026\_08/rung6](https://github.com/repowise-dev/repowise-bench/tree/master/results/bakeoff_2026_08/rung6)**
+The two harnesses' dollar figures are not comparable and are given only as what
+each cost to produce: Claude Code reports its own spend, while Codex reports
+token counts only, so its figure is computed from published list rates.
+
+**Before any of that, every tool got a fresh index built from scratch** on the
+same pinned commit, **11.3 minutes in total**: repowise 363.6s, Graphify 102.7s,
+code-review-graph 54.3s, CodeGraph 15.6s. Serena indexes on demand. We are the
+slowest of the four and [say so in §6](#6-indexing-time-the-row-we-lose). Those
+indexes were then reused by every later run, so the second harness cost agent
+time only.
+
+Two things are not in that table and are most of the real effort. **The
+competitor setups**: code-review-graph alone needs three steps that are not in
+its README, each of which produces a clean, plausible zero when missed, and
+getting Serena to answer anything at all needs an explicit project activation.
+A tool scoring zero because we set it up wrong is not a result, and finding that
+out is most of what this work is.
+
+**And the checks that come before any number is allowed to count.** Every arm is
+probed before each run to confirm its server actually answers, and a control
+that checks it can also correctly report a tool as unused, so a broken detector
+cannot quietly pass everything. Roughly a third of the total runs above are
+those checks and repeats rather than headline numbers.
+
+Raw data, every cell including the failures:
+**[rung9](https://github.com/repowise-dev/repowise-bench/tree/master/results/bakeoff_2026_08/rung9)**
+(the 48-question Codex run) and
+**[rung6](https://github.com/repowise-dev/repowise-bench/tree/master/results/bakeoff_2026_08/rung6)**
+(the 15-question runs and the proof-of-life checks).
 
 ---
 
