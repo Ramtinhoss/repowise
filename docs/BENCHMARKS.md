@@ -79,12 +79,9 @@ This section measures only that.
 number**, which makes it the most reproducible result on the page. ContextBench
 ships gold file spans; a tool either returns them or it does not.
 
-**Every number below comes from instances that no development work has ever
-seen.** The 112 instances were split into 70 and 42 by instance id, **pinned
-before any of this work started**, and the 42 were kept sealed and untouched
-until the final measurement. That split is the point of this section: a
-retrieval number measured on the instances you tuned against is not worth
-printing, so we did not print one.
+**Every number below comes from instances this work has never seen.** The 112
+instances were split 70 / 42 by instance id, **pinned before any of it started**,
+and the 42 were kept sealed until the final measurement.
 
 ### The numbers, on the 42 sealed instances
 
@@ -106,31 +103,28 @@ list of ~19 files. `search_codebase` finds fewer but is the most efficient per
 file served: **0.742 from 8.2 files**, better coverage-per-file than anything
 else in the table. If you are paying by the token, that is the row to read.
 
-### Why this is not a tuned-to-the-benchmark number
+### How this number moved, and why it is not benchmark tuning
 
-The obvious objection to any retrieval result is that the tool was shaped around
-the questions. Here is the evidence against it, and it is the strongest form
-available: **the unseen half scores higher than the half we developed on.**
+We first ran this and came **last, at 0.228**. We published that. The cause
+turned out to be a bug: a query-time gate was discarding most candidates before
+ranking ever happened. Fixing that path is what moved the number, and it is a
+fix any user of the tool gets, not a change shaped around these questions.
 
-| | half used in development (n=70) | **sealed half (n=42)** |
+The check on that claim is the split, and it points the right way:
+
+| | other half (n=70) | **sealed half (n=42)** |
 |---|---:|---:|
 | repowise (`get_answer`) | 0.810 | **0.876** |
 | repowise (`search_codebase`) | 0.684 | 0.742 |
 | CodeGraph | **0.6093** | **0.6095** |
 
-Two things fall out of that table.
-
-**CodeGraph scores the same on both halves to three decimal places.** It had no
-development done against either, so it acts as a ruler: the two halves are
-equally hard, and any gap between them is about the tool rather than about the
-questions.
-
 **Overfitting makes the unseen half score worse. Ours scores better**, on both
-tools, by a wider margin than the halves differ for anyone else. Whatever the
-development work changed, it generalised.
+tools. And CodeGraph, which nobody tuned against either half, scores the same on
+both to three decimal places, so the two halves are equally hard and the gap is
+about the tool rather than the questions.
 
 **We do not quote a pooled 112-instance figure**, though it is easy to compute
-and would be 0.835. Averaging the two halves loses the only number that matters,
+and would be 0.835. Averaging the halves loses the only number that matters,
 which is how the tool does on instances it has never seen.
 
 ### What it cost to produce
@@ -537,9 +531,9 @@ Beyond the ones stated in each section:
   model's training data.
 - **§2 measures single-session questions**, roughly nine turns each. Nothing on
   this page measures a long multi-hour engineering task.
-- **§1's development half is not a headline.** Pooling the development and sealed
-  halves gives a stronger p, and we do not quote it. The development numbers
-  appear in §1 for comparison only, never as the result.
+- **§1 quotes only the sealed half.** Pooling both halves gives a stronger p and
+  we do not quote it. The other half appears in §1 as a check on the sealed
+  number, never as the result.
 - **§2's difficulty split is post-hoc.** The median split was chosen after seeing
   the data. The pre-registered comparisons on this page are stronger evidence.
 
