@@ -37,6 +37,10 @@ def _update_graph_edge(existing: GraphEdge, edge_data: dict) -> None:
     imported = edge_data.get("imported_names_json")
     if imported is not None:
         existing.imported_names_json = imported
+    # Assigned unconditionally, including None: an edge that stops being
+    # cohesion (a real import statement appears between two package siblings)
+    # must lose the stamp, or cycle detection keeps skipping it forever.
+    existing.hint_source = edge_data.get("hint_source")
     confidence = edge_data.get("confidence")
     if confidence is not None:
         # Keep the max on collision, mirroring the in-memory resolver
@@ -53,6 +57,9 @@ def _update_graph_metric(existing: GraphMetric, m: dict) -> None:
 
 
 _MEMBERSHIP_FIELDS = ("node_type", "scc_id", "scc_size", "symbol_community_id")
+
+# Chunk size for IN (...) deletes — stays under SQLite's host-parameter limit.
+_MEMBERSHIP_PRUNE_CHUNK = 500
 
 
 def _update_graph_node_membership(existing: GraphNodeMembership, m: dict) -> None:
@@ -122,6 +129,7 @@ async def batch_upsert_graph_edges(
             imported_names_json=e.get("imported_names_json", "[]"),
             edge_type=e.get("edge_type", "imports"),
             confidence=e.get("confidence", 1.0),
+            hint_source=e.get("hint_source"),
         ),
     )
 
@@ -214,6 +222,7 @@ async def reconcile_edges_for_files(
                 imported_names_json=e.get("imported_names_json", "[]"),
                 edge_type=e.get("edge_type", "imports"),
                 confidence=e.get("confidence", 1.0),
+                hint_source=e.get("hint_source"),
             )
         )
     await session.flush()
@@ -265,7 +274,36 @@ async def batch_upsert_graph_node_membership(
     ``scc_id`` / ``scc_size`` (file nodes in a size>=2 cycle) /
     ``symbol_community_id`` (symbol nodes). Additive to ``graph_nodes``;
     SELECT-then-write for dialect portability (SQLite + Postgres).
+
+    The snapshot is a full recomputation, so absence is meaningful: a node the
+    caller did not send is a node that is no longer in any cycle or community.
+    Rows for absent nodes are therefore deleted rather than left behind. Without
+    that, a pure upsert let a file that dropped out of a cycle keep its old
+    ``scc_id`` / ``scc_size`` forever, and the Stats "largest cycle" record and
+    ``get_scc_members`` both read exactly those rows — so a fixed cycle stayed
+    on screen indefinitely.
     """
+    current = set(membership)
+    existing_ids = (
+        (
+            await session.execute(
+                select(GraphNodeMembership.node_id).where(
+                    GraphNodeMembership.repository_id == repository_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    stale = [nid for nid in existing_ids if nid not in current]
+    for i in range(0, len(stale), _MEMBERSHIP_PRUNE_CHUNK):
+        await session.execute(
+            delete(GraphNodeMembership).where(
+                GraphNodeMembership.repository_id == repository_id,
+                GraphNodeMembership.node_id.in_(stale[i : i + _MEMBERSHIP_PRUNE_CHUNK]),
+            )
+        )
+
     await _batch_upsert_keyed(
         session,
         GraphNodeMembership,
@@ -397,6 +435,7 @@ async def get_all_graph_edges(
                 "edge_type": row.edge_type,
                 "confidence": row.confidence,
                 "imported_names": imported_names,
+                "hint_source": row.hint_source,
             }
         )
     return edges

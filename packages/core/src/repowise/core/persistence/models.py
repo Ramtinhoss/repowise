@@ -282,6 +282,12 @@ class GraphEdge(Base):
     imported_names_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     edge_type: Mapped[str] = mapped_column(String(64), nullable=False, default="imports")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    # Provenance of a synthesised edge (e.g. "same_package", "header_source_pair").
+    # NULL for edges that come from a real import/using directive. Cycle detection
+    # reads it to drop intra-compilation-unit edges; see
+    # repowise.core.ingestion.cohesion. Persisted because the health engine and
+    # incremental updates run against a graph rehydrated from these rows.
+    hint_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now_utc
     )
