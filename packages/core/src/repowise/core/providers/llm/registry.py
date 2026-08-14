@@ -51,10 +51,10 @@ _BUILTIN_PROVIDERS: dict[str, tuple[str, str]] = {
     "litellm": ("repowise.core.providers.llm.litellm", "LiteLLMProvider"),
     "deepseek": ("repowise.core.providers.llm.deepseek", "DeepSeekProvider"),
     "kimi": ("repowise.core.providers.llm.kimi", "KimiProvider"),
-    "edenai": ("repowise.core.providers.llm.edenai", "EdenAIProvider"),
     "codex_cli": ("repowise.core.providers.llm.codex_cli", "CodexCliProvider"),
     "claude_cli": ("repowise.core.providers.llm.claude_cli", "ClaudeCliProvider"),
     "opencode": ("repowise.core.providers.llm.opencode", "OpenCodeProvider"),
+    "edenai": ("repowise.core.providers.llm.edenai", "EdenAIProvider"),
     "mock": ("repowise.core.providers.llm.mock", "MockProvider"),
 }
 
