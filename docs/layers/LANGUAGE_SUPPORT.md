@@ -1,6 +1,6 @@
 # Language Support
 
-repowise parses **19 languages to a full AST**, resolves imports and call
+repowise parses **20 languages to a full AST**, resolves imports and call
 graphs across them, and scores **13 at the Full tier** with code-health markers.
 Everything else in your repo is still tracked through git history and appears in
 the wiki. This page is the "what works for my language today" reference.
@@ -26,7 +26,7 @@ produce meaningful output.
 | Tier | Languages | What works |
 |------|-----------|------------|
 | [**Full**](#full-tier) | Python · TypeScript · JavaScript · Svelte · Vue · Java · Kotlin · Go · Rust · C++ · C# · Scala · Ruby | AST parsing, import resolution, named bindings, call resolution, heritage, docstrings, framework-aware edges, dynamic-hint extractors, and **code-health markers** |
-| [**Good**](#good-tier) | C · Swift · PHP · Dart · Object Pascal | Everything above except code-health markers (C, Swift, PHP, Object Pascal; Dart *does* get health markers). Dedicated workspace resolvers and framework edges per language, except Object Pascal, which resolves imports via the generic stem-map fallback (see [Known gaps](#object-pascal-known-gaps)) |
+| [**Good**](#good-tier) | C · Swift · PHP · Dart · Object Pascal · GDScript | Everything above except code-health markers (C, Swift, PHP, Object Pascal, GDScript; Dart *does* get health markers). Dedicated workspace resolvers and framework edges per language, except Object Pascal, which resolves imports via the generic stem-map fallback (see [Known gaps](#object-pascal-known-gaps)) |
 | [**SQL / dbt**](#sql--dbt) | `.sql` via sqlglot | Tables / views / functions / procedures as symbols with wiki pages; dbt projects get real `ref()` / `source()` lineage |
 | **Shell** | `.sh` `.bash` `.zsh` | Function definitions as symbols, `source` / `.` import edges (incl. `$SCRIPT_DIR` / `dirname` / `$BATS_ROOT` idioms), and function-level code-health complexity (CCN, nesting, cognitive). No class metrics, heritage, bindings, or dead-code flagging |
 | **Config / data** | OpenAPI · Protobuf · GraphQL · Dockerfile · Makefile · YAML · JSON · TOML · Terraform · Markdown | In the file tree and wiki; special handlers extract endpoints / targets where applicable |
@@ -171,6 +171,7 @@ mixins). Dedicated workspace resolvers per language.
 | **PHP** | `.php` | `use Foo\Bar\Baz` with composer.json PSR-4 longest-prefix resolution; Laravel, TYPO3 edges |
 | **Dart** | `.dart` | `import` / `export` / `part` URIs; `package:` via every `pubspec.yaml`; Flutter route tables and `runApp()` edges; **code-health markers** |
 | **Object Pascal** | `.pas` `.pp` `.dpr` `.dpk` `.lpr` `.inc` | `uses UnitA, UnitB;` resolved via the generic unit-name → file-stem fallback (no dedicated resolver); `.dpr`/`.dpk`/`.lpr` project files as entry points |
+| **GDScript** | `.gd` | `preload(...)` / `load(...)` / `extends "res://..."` resolved as absolute paths from the nearest `project.godot`, so a repo holding many Godot projects keeps each project's `res://` namespace separate |
 
 ### Object Pascal known gaps
 
@@ -199,6 +200,27 @@ are less battle-tested than C/Swift/PHP/Dart's:
   afterward — contained to that one class, not fixed, since a correct fix
   needs a nesting-aware scanner for one construct seen once in the validation
   corpus. See `prepare_pascal_source` in `ingestion/parser_helpers.py`.
+
+### GDScript known gaps
+
+Both dialects parse: GDScript 4 (`@export var`) and GDScript 3 (`export var`,
+`.method()` parent calls).
+
+- **A script without `class_name` gets no class symbol**, so its `extends`
+  produces no symbol-level heritage edge. Synthesizing a name from the file
+  stem would point the edge at a node that isn't in the graph. The
+  `extends "res://..."` import edge is unaffected and carries the dependency.
+- **`extends "res://base.gd"` is an import, not heritage** — a path is not a
+  type name.
+- **Engine methods on implicit `self`** (`get_node`, `emit_signal`, `connect`)
+  are unresolved targets; only Godot's *global* scope is filtered as builtin.
+  Same tradeoff as Pascal's framework calls.
+- **`uid://` paths and `load(some_variable)` stay external** — the first needs
+  the excluded `.uid` sidecars, the second needs dataflow. Neither is guessed.
+- **Signals share the `variable` kind** (no `signal` member in `SymbolKind`).
+- **No code-health markers yet**, and no `.tscn` / autoload / engine-callback
+  awareness — until that lands, dead-code output on a Godot project is not
+  trustworthy.
 
 ---
 
