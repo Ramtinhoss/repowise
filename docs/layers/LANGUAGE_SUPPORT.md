@@ -26,7 +26,7 @@ produce meaningful output.
 | Tier | Languages | What works |
 |------|-----------|------------|
 | [**Full**](#full-tier) | Python · TypeScript · JavaScript · Svelte · Vue · Java · Kotlin · Go · Rust · C++ · C# · Scala · Ruby | AST parsing, import resolution, named bindings, call resolution, heritage, docstrings, framework-aware edges, dynamic-hint extractors, and **code-health markers** |
-| [**Good**](#good-tier) | C · Swift · PHP · Dart · Object Pascal · GDScript | Everything above except code-health markers (C, Swift, PHP, Object Pascal, GDScript; Dart *does* get health markers). Dedicated workspace resolvers and framework edges per language, except Object Pascal, which resolves imports via the generic stem-map fallback (see [Known gaps](#object-pascal-known-gaps)) |
+| [**Good**](#good-tier) | C · Swift · PHP · Dart · Object Pascal · GDScript | Everything above except code-health markers (C, Swift, PHP, Object Pascal, GDScript; Dart *does* get health markers). Dedicated workspace resolvers and framework edges per language, except Object Pascal, which resolves imports via the generic stem-map fallback (see [Known gaps](#object-pascal-known-gaps)), and GDScript, which has a dedicated import resolver but no framework edges or named bindings (see [Known gaps](#gdscript-known-gaps)) |
 | [**SQL / dbt**](#sql--dbt) | `.sql` via sqlglot | Tables / views / functions / procedures as symbols with wiki pages; dbt projects get real `ref()` / `source()` lineage |
 | **Shell** | `.sh` `.bash` `.zsh` | Function definitions as symbols, `source` / `.` import edges (incl. `$SCRIPT_DIR` / `dirname` / `$BATS_ROOT` idioms), and function-level code-health complexity (CCN, nesting, cognitive). No class metrics, heritage, bindings, or dead-code flagging |
 | **Config / data** | OpenAPI · Protobuf · GraphQL · Dockerfile · Makefile · YAML · JSON · TOML · Terraform · Markdown | In the file tree and wiki; special handlers extract endpoints / targets where applicable |
@@ -214,13 +214,30 @@ Both dialects parse: GDScript 4 (`@export var`) and GDScript 3 (`export var`,
   type name.
 - **Engine methods on implicit `self`** (`get_node`, `emit_signal`, `connect`)
   are unresolved targets; only Godot's *global* scope is filtered as builtin.
-  Same tradeoff as Pascal's framework calls.
+  Same tradeoff as Pascal's framework calls. Note the builtin filter is
+  receiver-blind, so a project method sharing a global's name (`hash`, `seed`,
+  `str`) loses its call edge. `load` is excluded from the filter for exactly
+  this reason.
 - **`uid://` paths and `load(some_variable)` stay external** — the first needs
   the excluded `.uid` sidecars, the second needs dataflow. Neither is guessed.
 - **Signals share the `variable` kind** (no `signal` member in `SymbolKind`).
-- **No code-health markers yet**, and no `.tscn` / autoload / engine-callback
-  awareness — until that lands, dead-code output on a Godot project is not
-  trustworthy.
+- **No framework edges and no named bindings.** Unlike C / Swift / PHP / Dart
+  at this tier, there is no Godot framework-edge handler and no binding
+  extractor, so every `Import` carries `bindings=[]`.
+- **String and annotation dispatch is invisible**: `@rpc` methods invoked via
+  `rpc("name")`, `connect(..., "method_name")`, GDScript 3 `setget` accessor
+  names, and `$NodePath` / `%UniqueName` lookups produce no edges, so those
+  methods read as unreferenced.
+- **Annotation arguments are not imports** — `@icon("res://…")` and
+  `class_name X, "res://icon.png"` reference real files that are not recorded.
+- **Setter/getter bodies are not symbols**, so calls made inside one attribute
+  to the enclosing `variable` symbol.
+- **Code health: duplication markers DO run** (the clone tokenizer needs only a
+  grammar), but complexity, performance and dataflow dialects are not
+  registered — that gap is what keeps GDScript at Good rather than Full.
+- **No `.tscn` / autoload / engine-callback awareness yet**, so despite the ✅
+  in the pipeline table above, **dead-code output on a Godot project is not
+  trustworthy** until that lands.
 
 ---
 
