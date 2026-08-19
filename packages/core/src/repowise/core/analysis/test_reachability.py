@@ -186,6 +186,7 @@ __all__ = [
     "UNRELIABLE_CALL_ORIGINS",
     "CallGraphView",
     "ReachedBy",
+    "call_graph_from_db",
     "call_graph_from_graph",
     "files_reached_by_tests",
     "load_test_files",
@@ -247,6 +248,40 @@ def call_graph_from_graph(graph: Any) -> CallGraphView:
             edge_type in EXECUTION_EDGE_TYPES
             and attrs.get("resolution_origin") not in UNRELIABLE_CALL_ORIGINS
         ):
+            calls.setdefault(src, set()).add(dst)
+    return CallGraphView(declares, calls)
+
+
+async def call_graph_from_db(session: AsyncSession, repo_id: str) -> CallGraphView:
+    """The same view as :func:`call_graph_from_graph`, read from ``graph_edges``.
+
+    The health engine holds the parsed graph in memory; a request handler holds
+    a session. Both need the identical view, so this is a loader and not a
+    second walk - :func:`files_reached_by_tests` still does the walking, and
+    the two callers therefore cannot disagree about which files a test reaches.
+
+    One bulk read rather than the reverse walk's per-level ``IN`` queries. That
+    walk is seeded with a change's files; this question is seeded with the
+    repository, and a per-level ``IN`` list over every file is the shape it was
+    explicitly not built for.
+    """
+    declares: dict[str, set[str]] = {}
+    calls: dict[str, set[str]] = {}
+    wanted = ["defines", *sorted(EXECUTION_EDGE_TYPES)]
+    params: dict[str, Any] = {"repo_id": repo_id}
+    ets = _in_clause("e", wanted, params)
+    rows = await session.execute(
+        text(
+            "SELECT source_node_id, target_node_id, edge_type, resolution_origin "
+            "FROM graph_edges WHERE repository_id = :repo_id "
+            f"AND edge_type IN ({ets})"
+        ),
+        params,
+    )
+    for src, dst, edge_type, origin in rows:
+        if edge_type == "defines":
+            declares.setdefault(src, set()).add(dst)
+        elif origin not in UNRELIABLE_CALL_ORIGINS:
             calls.setdefault(src, set()).add(dst)
     return CallGraphView(declares, calls)
 
