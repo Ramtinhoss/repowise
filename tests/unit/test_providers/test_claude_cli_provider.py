@@ -129,8 +129,18 @@ def test_missing_cli_raises(monkeypatch):
         ClaudeCliProvider()
 
 
-def test_reasoning_modes_are_auto_only(claude_on_path):
-    assert ClaudeCliProvider().supported_reasoning_modes() == ("auto",)
+def test_reasoning_modes_are_the_effort_levels_the_cli_accepts(claude_on_path):
+    # ``claude -p --effort`` takes low | medium | high | xhigh | max, spelled
+    # exactly as repowise's own ReasoningMode values, so the mapping is the
+    # identity. off / none / minimal have no CLI spelling and are absent.
+    assert ClaudeCliProvider().supported_reasoning_modes() == (
+        "auto",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
 
 
 def test_available_model_options_are_labelled(claude_on_path):
@@ -181,7 +191,12 @@ async def test_generate_success(claude_on_path, monkeypatch):
     assert args[0] == claude_on_path
     assert "-p" in args
     assert args[args.index("--model") + 1] == "claude-sonnet-4-6"
-    assert args[args.index("--system-prompt") + 1] == "system rules"
+    system_prompt = args[args.index("--system-prompt") + 1]
+    assert system_prompt.startswith("system rules")
+    # The single-turn directive rides along; without it the model reaches for a
+    # disallowed tool, spends the one turn, and the page is lost silently.
+    assert "no tools available" in system_prompt
+    assert "single reply" in system_prompt
     assert args[args.index("--max-turns") + 1] == "1"
     assert "--strict-mcp-config" in args
     assert "--disallowed-tools" in args
@@ -215,8 +230,66 @@ async def test_unsupported_reasoning_warns_but_does_not_raise(claude_on_path, mo
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
 
-    result = await ClaudeCliProvider().generate("sys", "user", reasoning="high")
+    # "minimal" has no --effort spelling, unlike "high", which now maps.
+    result = await ClaudeCliProvider().generate("sys", "user", reasoning="minimal")
     assert result.content == "OK"
+
+
+async def test_supported_reasoning_mode_becomes_an_effort_flag(claude_on_path, monkeypatch):
+    captured: dict[str, Any] = {}
+
+    async def fake_exec(*args, **_kwargs):
+        captured["args"] = list(args)
+        return FakeProcess(stdout=_success_json())
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    await ClaudeCliProvider().generate("sys", "user", reasoning="high")
+
+    args = captured["args"]
+    assert args[args.index("--effort") + 1] == "high"
+
+
+async def test_auto_reasoning_sends_no_effort_flag(claude_on_path, monkeypatch):
+    """``auto`` means "leave the provider default alone", so the flag is absent."""
+    captured: dict[str, Any] = {}
+
+    async def fake_exec(*args, **_kwargs):
+        captured["args"] = list(args)
+        return FakeProcess(stdout=_success_json())
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    await ClaudeCliProvider().generate("sys", "user")
+
+    assert "--effort" not in captured["args"]
+
+
+async def test_nonzero_exit_surfaces_the_json_error_on_stdout(claude_on_path, monkeypatch):
+    """The CLI writes its real error to stdout as JSON and leaves stderr empty.
+
+    Before this, ``_error_message`` skipped any candidate starting with ``{``
+    and the ``is_error`` branch was unreachable behind the returncode check, so
+    a bad model name surfaced as the useless ``claude -p exited with 1``.
+    """
+
+    async def fake_exec(*_args, **_kwargs):
+        return FakeProcess(
+            returncode=1,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "is_error": True,
+                    "api_error_status": 404,
+                    "result": "There's an issue with the selected model",
+                }
+            ),
+        )
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+    with pytest.raises(ProviderError, match="issue with the selected model"):
+        await ClaudeCliProvider().generate("sys", "user")
 
 
 async def test_nonzero_exit_raises_with_stderr(claude_on_path, monkeypatch):

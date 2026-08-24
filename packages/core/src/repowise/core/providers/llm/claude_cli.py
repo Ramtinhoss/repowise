@@ -26,6 +26,7 @@ Two deliberate differences from the other agent-CLI providers:
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
 import json
 import os
@@ -56,6 +57,27 @@ _DEFAULT_MODEL = "claude-haiku-4-5"
 _LABEL_PREFIX = "claude_cli/"
 
 _MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/\-]*$")
+
+# Appended to every system prompt. --disallowed-tools stops a tool from running
+# but the model does not know that: on a prompt that invites investigation it
+# reaches for one anyway, burns the single turn, and the CLI returns
+# ``subtype: error_max_turns`` with ``result: null``. The page is then
+# backfilled with a structural placeholder and the run still exits 0, so the
+# loss is silent. Measured on a 188-page repo: 3 pages lost, one of them
+# ``repo_overview``, which seeds CLAUDE.md and the dashboard.
+#
+# Raising --max-turns does not fix it (4 turns fails the same way). Saying so in
+# the prompt does, in one turn, and it also drops roughly 10k tokens per call
+# because tool definitions stay in context even when every tool is disallowed.
+# ``claude -p --effort`` accepts exactly these, and they are spelled the same
+# as repowise's ReasoningMode values, so the mapping is the identity.
+_CLI_EFFORT_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "xhigh", "max"})
+_EFFORT_MODES: tuple[ReasoningMode, ...] = ("auto", "low", "medium", "high", "xhigh", "max")
+
+_SINGLE_TURN_DIRECTIVE = (
+    "You have no tools available and cannot read files or run commands. "
+    "Everything you need is in this prompt. Answer in a single reply."
+)
 
 # A process spawn plus a full CLI turn on a prompt that can carry a lot of file
 # context. Generous, because too low is not a slow page but no page.
@@ -168,6 +190,28 @@ def _tail(text: str, max_chars: int = 2_000) -> str:
 
 
 def _error_message(stderr: str, stdout: str, returncode: int) -> str:
+    """The most useful description of a failed ``claude -p`` run.
+
+    On a failure the CLI writes its result envelope as JSON on **stdout**,
+    leaves stderr empty, and exits non-zero. The plain-text scan below skips
+    anything starting with ``{``, so before this the caller was left with the
+    bare ``claude -p exited with 1`` in exactly the case where the CLI had
+    already said what went wrong. Read the envelope first:
+
+        {"is_error": true, "api_error_status": 404,
+         "result": "There's an issue with the selected model ..."}
+    """
+    payload: dict[str, Any] = {}
+    with contextlib.suppress(ProviderError):
+        payload = _parse_result(stdout)
+    if payload:
+        detail = payload.get("api_error_status") or payload.get("subtype")
+        result_text = payload.get("result")
+        parts = [str(detail)] if detail else []
+        if isinstance(result_text, str) and result_text.strip():
+            parts.append(_tail(result_text, max_chars=500))
+        if parts:
+            return f"claude -p failed ({': '.join(parts)})"
     for candidate in (_tail(stderr), _tail(stdout)):
         if not candidate:
             continue
@@ -251,9 +295,11 @@ class ClaudeCliProvider(BaseProvider):
         return _model_label(self._model)
 
     def supported_reasoning_modes(self) -> tuple[ReasoningMode, ...]:
-        # The CLI exposes no per-call reasoning-effort flag, so the only honest
-        # answer is "provider default".
-        return ("auto",)
+        # ``claude -p --effort <level>`` takes low | medium | high | xhigh | max,
+        # which is repowise's own ReasoningMode vocabulary minus the three that
+        # mean "do not think" (off / none / minimal). Those have no CLI spelling,
+        # so they still degrade to the provider default with a warning.
+        return _EFFORT_MODES
 
     def available_model_options(self) -> tuple[ProviderModelOption, ...]:
         # The CLI has no machine-readable model catalog to query, so this is a
@@ -290,10 +336,15 @@ class ClaudeCliProvider(BaseProvider):
     def _get_scratch_dir(self) -> str:
         """An empty cwd for the subprocess, so no CLAUDE.md is auto-discovered."""
         if self._scratch_dir is None or not Path(self._scratch_dir).is_dir():
-            self._scratch_dir = str(Path(tempfile.mkdtemp(prefix="repowise-claude-cli-")).resolve())
+            path = str(Path(tempfile.mkdtemp(prefix="repowise-claude-cli-")).resolve())
+            # One empty directory per provider instance, and BaseProvider has no
+            # close hook to hang this on. atexit is enough: the directory is only
+            # ever a cwd, nothing is written into it.
+            atexit.register(shutil.rmtree, path, True)
+            self._scratch_dir = path
         return self._scratch_dir
 
-    def _build_command(self, system_prompt: str) -> list[str]:
+    def _build_command(self, system_prompt: str, effort: str | None = None) -> list[str]:
         cmd = [
             self._claude_cmd,
             "-p",
@@ -305,7 +356,13 @@ class ClaudeCliProvider(BaseProvider):
             "1",
             "--strict-mcp-config",
         ]
+        if effort:
+            cmd.extend(["--effort", effort])
         prompt = system_prompt.strip()
+        # The directive goes in even with an empty caller prompt: it is what
+        # makes --max-turns 1 survivable, not a nicety on top of the prompt.
+        joiner = "\n\n"
+        prompt = joiner.join(p for p in (prompt, _SINGLE_TURN_DIRECTIVE) if p)
         if prompt:
             # --system-prompt replaces Claude Code's agent preamble rather than
             # appending to it: repowise's prompt is the whole instruction set,
@@ -329,7 +386,10 @@ class ClaudeCliProvider(BaseProvider):
         # contract says to clip rather than raise, so they are accepted and
         # dropped.
         mode = normalize_reasoning(reasoning)
-        if mode != "auto":
+        effort: str | None = None
+        if mode in _CLI_EFFORT_LEVELS:
+            effort = mode
+        elif mode != "auto":
             # Warn rather than raise: failing here would kill a whole docs run
             # over a flag the CLI cannot express.
             log.warning("claude_cli.reasoning.unsupported", requested=mode, using="auto")
@@ -337,7 +397,7 @@ class ClaudeCliProvider(BaseProvider):
         if self._rate_limiter:
             await self._rate_limiter.acquire(estimated_tokens=max_tokens)
 
-        cmd = self._build_command(system_prompt)
+        cmd = self._build_command(system_prompt, effort=effort)
         cwd = self._get_scratch_dir()
 
         log.debug("claude_cli.generate.start", model=self.model_name, request_id=request_id)
