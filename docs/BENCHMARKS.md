@@ -12,6 +12,11 @@ says **not measured** rather than carrying a checkmark.
 
 ## The scoreboard
 
+**Six of the thirteen rows below are wins against a named competitor. Two are
+losses, one is level, three are not measured, and one is a ratio against no tool
+at all.** They sit in one table on purpose: a page that reports only its wins is
+marketing with a sample size attached.
+
 | Question | Measured against | Result |
 |---|---|---|
 | **Are the call edges true, judged by a compiler** | CodeGraph, codebase-memory-mcp, Graphify, code-review-graph | [**we win**](#is-the-call-graph-correct). No tool that finds as much of the graph gets more of it right, in all 7 cells |
@@ -28,18 +33,14 @@ says **not measured** rather than carrying a checkmark.
 | **Documentation generation** | DeepWiki, Google Code Wiki, Swimm | **not measured** |
 | **PR review** | CodeRabbit, Greptile | **not measured** |
 
-**The two cost rows are different questions and are the easiest thing on this page
-to misread.** Building the call graph, we are the lightest tool measured and about
-as fast as the fastest. Building the *whole index*, we are 22x slower than a tool
-that only builds a call graph, because by then we have also built the git history
-layer, the wiki, the decisions and the health pass. Both are on the page with their
-denominators stated.
-
-The three **not measured** rows are capability comparisons rather than
-measurements, and they live in the
-[README's feature table](../README.md#how-it-compares-on-capability) where a reader
-can tell the difference. We would rather write "not measured" than let a checkmark
-do a number's job.
+**The two cost rows are different questions and are the easiest thing here to
+misread.** Building the call graph, we are the lightest tool measured and about as
+fast as the fastest. Building the *whole index*, we are 22x slower than a tool
+that only builds a call graph, because by then we have also built the git history,
+the wiki, the decisions and the health pass. The **not measured** rows are
+capability comparisons rather than measurements, and live in the
+[README's feature table](../README.md#how-it-compares-on-capability); we would
+rather write that than let a checkmark do a number's job.
 
 <div align="center">
 <picture>
@@ -112,11 +113,10 @@ CodeGraph and codebase-memory-mcp, we are the most precise in seven of seven, an
 that narrower claim should always carry its label.
 
 **What the oracle adds is the price of a bigger map, not an excuse for ours.** On
-syft, more than a third of what the coverage leader emits is a call the Go compiler
-says does not exist. And the highest precision anywhere on this page, 0.997, comes
-from a graph holding **17% of the calls in the repository**; on gitleaks that same
-tool stored 4,367 call rows of which **76** resolve to anything, and a graph that
-small is very hard to be wrong in and not much use to walk.
+syft, more than a third of what the coverage leader emits is a call the Go
+compiler says does not exist, and the highest precision anywhere on this page,
+0.997, comes from a graph holding **17% of the calls in the repository**. A graph
+that small is very hard to be wrong in and not much use to walk.
 
 **Graphify's result is the one worth taking seriously** and should not be lumped in
 with that: 89% recall against our 95% on gitleaks is a narrow, real trade.
@@ -194,9 +194,14 @@ missed:
 
 ## The same question, hand-graded across nine languages
 
-The oracle covers two languages. This one covers nine, on both sides, by the same
-method: 30 rows per language per tool, seed 2026, stratified by resolution
-strategy, every row read from source with its imports and enclosing scope open.
+**Two sections ask whether the edges are true, because there are two ways to
+find out and each covers what the other cannot.** Above, a compiler is the judge
+across five tools, which is unarguable but reaches only two languages. Here,
+people read the source across nine languages and two tools, which reaches far
+wider but is graded by us. Where both exist they agree to within about a point.
+
+30 rows per language per tool, seed 2026, stratified by resolution strategy,
+every row read from source with its imports and enclosing scope open.
 Java is the one cell read at 40 rows rather than 30, because it was a single
 repository and that repository turned out to be an outlier; it was widened to a
 second one.
@@ -244,22 +249,13 @@ two agree where both exist, to within about a point, but only the oracle has an
 answer key we did not produce.
 
 **All nine cells are measured at one commit**, and the resolver has moved since.
-The staleness still runs **conservative**, but not for the reason this page used
-to give. It is not true that the changes in between "only remove wrong edges and
-gained zero": they added plenty, C++ most of all, whose graded population grew by
-roughly a quarter. What is true is measured rather than assumed. Every corpus
-repository's resolved call population was snapshotted at the cell commit and
-again at the current tip and compared site by site; three cells are byte-identical
-and six moved. **Of the 280 graded rows, twelve moved: eleven sites disappeared
-and one rebound elsewhere. All twelve are rows this page grades `wrong`, and not
-one row graded `correct` moved at all.** So the direction is knowable: re-reading
-those cells at the tip can only raise our number, and 85.7% is a floor in the
-strict sense. No cell was measured on the 0.44.0 release.
-
-Twelve invalidated rows is also why the table has not been redrawn here: a cell
-whose population moved is no longer a strictly proportional draw, so the honest
-repair is a fresh draw per cell rather than patching twelve rows, and that is a
-re-read of six cells rather than an edit.
+Every corpus repository's call population was diffed site by site against the
+current tip: three cells are byte-identical, six moved, and **of the 280 graded
+rows twelve moved — every one of them a row graded `wrong`, with no row graded
+`correct` moving at all.** Re-reading at the tip can therefore only raise the
+number, so 85.7% is a floor. The table is not redrawn here because a cell whose
+population moved needs a fresh proportional draw rather than a twelve-row patch.
+No cell was measured on the 0.44.0 release.
 
 **All 600 graded rows are published**, one file per cell, each row carrying the call
 site, the declaration the tool bound it to, the verdict and the reason it was
@@ -388,13 +384,11 @@ inferred.
 a field in which more than one tool works. Correcting for testing five tools at
 once, three reductions are solid and two are marginal.
 
-**We ran this on three agent harnesses**, because the answer depends on the harness
-as much as on the tools. On Claude Code (15 questions, `claude-sonnet-5`) we
-measured **-15.9%** and were the only arm the agent reliably called. On a local
-`qwen3:8b` under Ollama, where inference is free and the win shows up as time
-instead, the local-only tool set ran **-47.9% output tokens in -41.5% wall clock**.
-Both tables are in the fold below with their controls, including the one whose
-token column fails its own control and is therefore quoted for nobody.
+**We ran this on three agent harnesses**, because the answer depends on the
+harness as much as on the tools: Codex above, Claude Code, and a local `qwen3:8b`
+under Ollama where inference is free and the win shows up as time instead. Both
+other tables are in the fold with their controls, including the one whose token
+column fails its own control and is therefore quoted for nobody.
 
 <details>
 <summary><b>Method, limits, and what this does not show</b></summary>
@@ -607,10 +601,9 @@ reaches **5,523 MB** on the same repository where we use 468 MB. That is the
 difference between running in a normal CI container and not.
 
 **Speed is level, not a win, and this page used to claim otherwise.** CodeGraph is
-fastest on 16 repositories to our 14. The split is size: we lead under 1,000 files,
-2.04s to 2.37s, and trail above it, 10.63s to 8.86s. We win the middle and lose the
-tail, and the reason is that we do more resolution work per file. The other half of
-that trade is the precision table above.
+fastest on 16 repositories to our 14: we lead under 1,000 files and trail above
+it, because we do more resolution work per file. The other half of that trade is
+the precision table above.
 
 ### Building the whole index
 
@@ -628,14 +621,11 @@ field on every repository measured. On `django/django`:
 That is **22x** CodeGraph like for like and **135x** with prose on. Both numbers
 ship and the 22x is not the user-facing one.
 
-**The 22x is not a graph number.** By the time that clock stops, the call graph has
-been built in about 3 seconds and the rest of the run has built four more things:
-a **graph** of 36,485 nodes, 90,477 edges and 31,384 symbols plus PageRank,
-betweenness, Leiden communities and execution-flow tracing; **git history** mined
-across 2,630 files for hotspots, ownership, co-change pairs and bus factor; **3,392
-wiki pages** rendered and embedded for natural-language search; **architectural
-decisions** mined from history and sessions; and **code health**, 5,317 findings
-plus 155 unreachable files and 98 unused exports.
+**The 22x is not a graph number.** The call graph itself is done in about 3
+seconds. The rest of that clock builds four more layers on `django/django`: a
+90,477-edge graph with communities and flow tracing, git history mined across
+2,630 files, **3,392 wiki pages** embedded for natural-language search,
+architectural decisions, and code health at **5,317 findings**.
 
 So "22x slower" and "the index contains categorically more" are both true and
 neither cancels the other. **If a call graph is all you want, CodeGraph builds one
@@ -767,7 +757,7 @@ Raw CSV:
 ## Limits that apply to the whole page
 
 <details>
-<summary><b>Six limits that are not specific to any one section</b></summary>
+<summary><b>Four limits that are not specific to any one section</b></summary>
 
 - **Every retrieval number here is Python or Go.** The graph sections are wider, at
   nine languages hand-graded and two compiler-graded, and they are the only
@@ -787,10 +777,6 @@ Raw CSV:
   is in every model's training data, and it measures single-session questions of
   roughly four to nine turns each. **Nothing on this page measures a long
   multi-hour engineering task**, and we will not imply a number for one.
-- **Precision is one of two halves.** We lead no recall cell against the oracle and
-  lose cross-file coverage on 15 of 35 repositories in the same bench.
-- **The health signal is weak among files of similar size**, and it ties raw line
-  count on discrimination.
 - **Command-output compression has no head-to-head and one row that needs
   re-measuring.**
 
