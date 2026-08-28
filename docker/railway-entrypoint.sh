@@ -9,27 +9,37 @@
 #     when ownership is already correct.
 #   * Railway injects $PORT and expects the service to listen on it. The base
 #     entrypoint reads PORT_FRONTEND, so map one onto the other.
+#   * HOME must be re-pointed. A `USER` directive makes Docker set HOME from
+#     the passwd entry, but dropping privileges at runtime does not: the root
+#     HOME=/root survives into the child, and the app then tries to write
+#     ~/.repowise/provider_config.json to a directory it has no rights to.
+#     Pointing it at the volume also means a saved API key outlives a deploy.
 set -e
 
 export PORT_FRONTEND="${PORT:-${PORT_FRONTEND:-3000}}"
 export PORT_BACKEND="${PORT_BACKEND:-7337}"
 
-mkdir -p /data
+APP_HOME=/data/home
+
+mkdir -p /data "${APP_HOME}"
 chown -R repowise:repowise /data 2>/dev/null || \
   echo "WARNING: could not chown /data; the volume may be read-only for the app user."
 
 # Already unprivileged (Railway can be configured to run as non-root): just go.
 if [ "$(id -u)" != "0" ]; then
+  export HOME="${APP_HOME}"
   exec /app/entrypoint.sh
 fi
 
 # Drop privileges with whichever util-linux helper the base image ships.
+# Each form sets HOME explicitly rather than trusting what it inherits.
 if command -v setpriv >/dev/null 2>&1; then
-  exec setpriv --reuid=repowise --regid=repowise --init-groups /app/entrypoint.sh
+  exec setpriv --reuid=repowise --regid=repowise --init-groups \
+    env HOME="${APP_HOME}" /app/entrypoint.sh
 elif command -v runuser >/dev/null 2>&1; then
-  exec runuser -u repowise -- /app/entrypoint.sh
+  exec runuser -u repowise -- env HOME="${APP_HOME}" /app/entrypoint.sh
 elif command -v su >/dev/null 2>&1; then
-  exec su -s /bin/bash repowise -c /app/entrypoint.sh
+  exec su -s /bin/bash repowise -c "HOME='${APP_HOME}' /app/entrypoint.sh"
 fi
 
 echo "WARNING: no privilege-drop helper found; running as root."
