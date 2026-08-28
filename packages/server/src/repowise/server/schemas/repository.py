@@ -35,6 +35,52 @@ class RepoCreate(BaseModel):
         return str(resolved)
 
 
+class RemoteRepoCreate(BaseModel):
+    """Register a repository the server clones itself, given its remote URL.
+
+    The counterpart to :class:`RepoCreate` for deployments where the operator
+    has no path to type — a container, a shared host, anything not the
+    machine the checkout lives on.
+    """
+
+    url: str
+    # Defaults to the repository name parsed out of the URL, which is what
+    # the operator would have typed anyway.
+    name: str | None = None
+    # Cloned branch. ``None`` takes whatever the remote's HEAD points at,
+    # which beats guessing between "main" and "master".
+    default_branch: str | None = None
+    # Used for this clone and then dropped — it is never written to disk, to
+    # the database, or into the cloned .git/config, and never appears in a
+    # response. A private repository must supply it again to be re-cloned.
+    access_token: str | None = None
+    settings: dict | None = None
+
+    @field_validator("access_token")
+    @classmethod
+    def blank_token_is_none(cls, v: str | None) -> str | None:
+        # An empty field from a form means "no token", not "authenticate with
+        # the empty string" — which git would turn into a confusing failure.
+        return (v or "").strip() or None
+
+
+class CloneTaskResponse(BaseModel):
+    """Progress of a URL-initiated add.
+
+    ``repo_id`` is null until ``status`` is ``completed``; clients poll this
+    and then continue into the normal preflight/index flow with that id.
+    """
+
+    clone_id: str
+    status: str
+    message: str
+    slug: str
+    url: str
+    repo_id: str | None = None
+    local_path: str | None = None
+    error: str | None = None
+
+
 class RepoUpdate(BaseModel):
     name: str | None = None
     url: str | None = None

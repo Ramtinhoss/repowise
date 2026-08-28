@@ -34,12 +34,20 @@ from repowise.server.job_executor import execute_job
 from repowise.server.mcp_server._meta import read_live_head, resolve_indexed_commit
 from repowise.server.routers._sorting import repository_sort_key
 from repowise.server.schemas import (
+    CloneTaskResponse,
+    RemoteRepoCreate,
     RepoCreate,
     RepoResponse,
     ReposSummaryResponse,
     RepoStatsResponse,
     RepoSummaryRow,
     RepoUpdate,
+)
+from repowise.server.services.clone_tasks import CloneTask, get_clone_tasks, start_clone
+from repowise.server.services.git_remote import (
+    RemoteSourceError,
+    StaticTokenProvider,
+    parse_remote_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,6 +135,70 @@ async def create_repo(
 
     response.initial_job_id = await _enqueue_index_job(request, repo_factory, repo_id)
     return response
+
+
+def _clone_response(task: CloneTask) -> CloneTaskResponse:
+    return CloneTaskResponse(
+        clone_id=task.id,
+        status=task.status,
+        message=task.message,
+        slug=task.slug,
+        url=task.url,
+        repo_id=task.repo_id,
+        local_path=task.local_path,
+        error=task.error,
+    )
+
+
+# Registered ahead of the "/{repo_id}" routes below: a literal path declared
+# after a parameterised one of the same shape is unreachable.
+@router.post("/remote", response_model=CloneTaskResponse, status_code=202)
+async def create_repo_from_remote(
+    body: RemoteRepoCreate,
+    request: Request,
+) -> CloneTaskResponse:
+    """Add a repository by URL, cloning it onto the server.
+
+    The companion to ``POST /api/repos`` for deployments where the caller has
+    no path on this filesystem to name. Returns ``202`` with a clone handle
+    rather than the repository itself — a real clone outlives an HTTP request
+    — so clients poll ``GET /api/repos/remote/{clone_id}`` until ``repo_id``
+    appears, then continue into the usual preflight and index steps.
+
+    Indexing is deliberately *not* started here: the cost estimate that gates
+    LLM spend needs the files on disk, so it can only run once the clone has
+    landed.
+    """
+    try:
+        source = parse_remote_url(body.url)
+    except RemoteSourceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    credentials = StaticTokenProvider(body.access_token) if body.access_token else None
+
+    task = start_clone(
+        request.app.state,
+        source=source,
+        name=(body.name or "").strip() or source.name,
+        default_branch=body.default_branch,
+        credentials=credentials,
+        settings=body.settings,
+    )
+    return _clone_response(task)
+
+
+@router.get("/remote/{clone_id}", response_model=CloneTaskResponse)
+async def get_remote_clone(clone_id: str, request: Request) -> CloneTaskResponse:
+    """Progress of a clone started by ``POST /api/repos/remote``.
+
+    Handles live in memory for the life of the process, so a restart mid-clone
+    yields a 404 — which is accurate: that clone is gone and the add must be
+    retried.
+    """
+    task = get_clone_tasks(request.app.state).get(clone_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Clone task not found")
+    return _clone_response(task)
 
 
 async def _enqueue_index_job(request: Request, session_factory, repo_id: str) -> str | None:

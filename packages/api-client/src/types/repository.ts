@@ -14,6 +14,39 @@ export interface RepoCreate {
   index?: boolean;
 }
 
+/** Add a repository by URL, letting the server clone it.
+ *
+ * The counterpart to {@link RepoCreate} for a repowise running anywhere but
+ * the machine holding the checkout — a container, a shared host — where
+ * there is no `local_path` the caller could name. */
+export interface RemoteRepoCreate {
+  /** `https://host/owner/repo`, `git@host:owner/repo.git`, or `owner/repo`. */
+  url: string;
+  /** Defaults to the repository name parsed out of the URL. */
+  name?: string;
+  /** Branch to clone. Omit to take whatever the remote's HEAD points at. */
+  default_branch?: string;
+  /** Used for this clone only — never stored, never returned, never written
+   * into the cloned .git/config. Re-cloning a private repo asks again. */
+  access_token?: string;
+  settings?: Record<string, unknown>;
+}
+
+export type CloneStatus = "pending" | "running" | "completed" | "failed";
+
+/** Progress of a URL-initiated add. `repo_id` is null until `status` is
+ * `"completed"`, at which point the normal preflight/index flow takes over. */
+export interface CloneTaskResponse {
+  clone_id: string;
+  status: CloneStatus;
+  message: string;
+  slug: string;
+  url: string;
+  repo_id: string | null;
+  local_path: string | null;
+  error: string | null;
+}
+
 export interface RepoUpdate {
   name?: string;
   url?: string;

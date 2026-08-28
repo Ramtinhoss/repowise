@@ -90,6 +90,48 @@ ANTHROPIC_API_KEY=sk-ant-... docker compose up
 
 ---
 
+## Adding repositories on a remote server
+
+Registering a repository by local path assumes the checkout is on the same
+filesystem as the server — true on a laptop, never true on a container host.
+On a hosted deployment, add repositories by URL instead and let the server
+clone them:
+
+```bash
+# Start the clone. Returns immediately with a handle.
+curl -X POST https://your-instance/api/repos/remote \
+  -H "Authorization: Bearer $REPOWISE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://github.com/org/repo"}'
+
+# Poll it — a clone outlives an HTTP request.
+curl https://your-instance/api/repos/remote/$CLONE_ID \
+  -H "Authorization: Bearer $REPOWISE_API_KEY"
+```
+
+Once `repo_id` appears on the handle, index it with
+`POST /api/repos/{repo_id}/index`. The dashboard's **Add Repository → From
+URL** tab does all of this for you, including the cost estimate before any
+LLM spend.
+
+The URL may be a full `https://` URL, GitHub's `git@host:owner/repo.git` ssh
+form, or bare `owner/repo` shorthand. Only `https` is cloned — ssh would need
+key material the server does not manage.
+
+**Private repositories** take an `access_token` (a GitHub PAT or equivalent).
+It is used for that clone and then discarded: it is never written to disk, to
+the database, or into the cloned `.git/config`, and never appears in an API
+response or in the logs. Re-cloning a private repository asks for it again.
+
+{: .note }
+Clones are full, not shallow. repowise derives ownership and churn from
+`git log`, so `--depth 1` would silently degrade that analysis rather than
+fail loudly. Set `REPOWISE_REPOS_DIR` to somewhere persistent — the Docker
+image defaults it to `/data/repos` on the data volume — or every redeploy
+re-clones from scratch.
+
+---
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -102,6 +144,7 @@ ANTHROPIC_API_KEY=sk-ant-... docker compose up
 | `REPOWISE_HOST` | `127.0.0.1` | API server bind host |
 | `REPOWISE_API_KEY` | — | Bearer token for the API. Required to serve callers on other hosts; without it requests from off-host are refused |
 | `REPOWISE_PORT` | `7337` | API server port |
+| `REPOWISE_REPOS_DIR` | `~/.repowise/repos` | Where repositories added by URL are cloned. Put it on persistent storage |
 | `REPOWISE_MCP_PORT` | `7338` | MCP SSE server port |
 
 ---

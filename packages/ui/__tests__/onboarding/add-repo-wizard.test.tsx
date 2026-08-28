@@ -122,3 +122,111 @@ describe("AddRepoWizard", () => {
     expect(screen.getByLabelText("Local Path")).toBeTruthy();
   });
 });
+
+describe("AddRepoWizard — adding from a URL", () => {
+  function makeRemoteAdapter(overrides?: Partial<AddRepoWizardAdapter>) {
+    return makeAdapter({
+      createRepoFromUrl: vi.fn().mockResolvedValue({ id: "r2", name: "app" }),
+      ...overrides,
+    });
+  }
+
+  // Radix tabs select on mousedown (or focus), not on a bare click event.
+  function selectRemoteTab() {
+    const tab = screen.getByRole("tab", { name: /From URL/ });
+    fireEvent.mouseDown(tab);
+    fireEvent.click(tab);
+  }
+
+  async function submitRemote(url: string) {
+    selectRemoteTab();
+    fireEvent.change(screen.getByLabelText("Repository URL"), { target: { value: url } });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+  }
+
+  it("hides the URL source when the adapter cannot clone", () => {
+    // A client that only reaches its own filesystem should not offer a
+    // source it has no way to satisfy.
+    render(<AddRepoWizard adapter={makeAdapter()} open onOpenChange={vi.fn()} />);
+    expect(screen.queryByRole("tab", { name: /From URL/ })).toBeNull();
+    expect(screen.getByLabelText("Local Path")).toBeTruthy();
+  });
+
+  it("clones, registers, then runs the same preflight and index steps", async () => {
+    const adapter = makeRemoteAdapter();
+    render(<AddRepoWizard adapter={adapter} open onOpenChange={vi.fn()} />);
+
+    await submitRemote("https://github.com/acme/app");
+
+    await waitFor(() => expect(adapter.onDone).toHaveBeenCalledWith("r2", "job-1"));
+    expect(adapter.createRepoFromUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://github.com/acme/app", name: "app" }),
+      expect.any(Function),
+    );
+    // The local-path registration path must not also fire.
+    expect(adapter.createRepo).not.toHaveBeenCalled();
+    expect(adapter.preflight).toHaveBeenCalledWith("r2");
+    expect(adapter.startIndex).toHaveBeenCalledWith("r2");
+  });
+
+  it("derives the name from the URL until the operator overrides it", async () => {
+    const adapter = makeRemoteAdapter();
+    render(<AddRepoWizard adapter={adapter} open onOpenChange={vi.fn()} />);
+
+    selectRemoteTab();
+    const urlField = screen.getByLabelText("Repository URL");
+
+    fireEvent.change(urlField, { target: { value: "git@github.com:acme/my-app.git" } });
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("my-app");
+
+    // Once typed by hand, further URL edits must not clobber it.
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "custom" } });
+    fireEvent.change(urlField, { target: { value: "https://github.com/acme/other" } });
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("custom");
+  });
+
+  it("passes a token through for private repos and shows clone progress", async () => {
+    let report: ((m: string) => void) | undefined;
+    const adapter = makeRemoteAdapter({
+      createRepoFromUrl: vi.fn().mockImplementation((_input, onProgress) => {
+        report = onProgress;
+        return new Promise(() => {}); // never settles: hold the cloning step
+      }),
+    });
+    render(<AddRepoWizard adapter={adapter} open onOpenChange={vi.fn()} />);
+
+    selectRemoteTab();
+    fireEvent.change(screen.getByLabelText("Repository URL"), {
+      target: { value: "https://github.com/acme/private-app" },
+    });
+    fireEvent.change(screen.getByLabelText(/Access token/), {
+      target: { value: "ghp_token" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+
+    expect(await screen.findByText(/Cloning repository/)).toBeTruthy();
+    expect(adapter.createRepoFromUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ access_token: "ghp_token" }),
+      expect.any(Function),
+    );
+
+    // Progress messages from the server reach the dialog.
+    report?.("Cloning acme/private-app");
+    expect(await screen.findByText(/Cloning acme\/private-app/)).toBeTruthy();
+  });
+
+  it("returns to the form with the failure anchored to the URL field", async () => {
+    const adapter = makeRemoteAdapter({
+      createRepoFromUrl: vi
+        .fn()
+        .mockRejectedValue(new Error("git clone failed: repository not found")),
+    });
+    render(<AddRepoWizard adapter={adapter} open onOpenChange={vi.fn()} />);
+
+    await submitRemote("https://github.com/acme/missing");
+
+    expect(await screen.findByText(/repository not found/)).toBeTruthy();
+    expect(screen.getByLabelText("Repository URL")).toBeTruthy();
+    expect(adapter.preflight).not.toHaveBeenCalled();
+  });
+});

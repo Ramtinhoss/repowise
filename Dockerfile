@@ -70,6 +70,9 @@ RUN mkdir -p /data
 ENV REPOWISE_DB_URL=sqlite+aiosqlite:////data/wiki.db
 ENV LANCEDB_PATH=/data/lancedb
 ENV GRAPH_PATH=/data/graphs
+# Repositories added by URL are cloned here. On the mounted volume, so a
+# redeploy does not discard every checkout the instance has indexed.
+ENV REPOWISE_REPOS_DIR=/data/repos
 ENV REPOWISE_EMBEDDER=mock
 ENV PORT_BACKEND=7337
 ENV PORT_FRONTEND=3000

@@ -6,6 +6,8 @@ import {
   ArrowLeft,
   CheckCircle2,
   FileText,
+  FolderGit2,
+  Globe,
   Loader2,
   Settings,
   XCircle,
@@ -27,6 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { formatNumber } from "../lib/format";
 
 /** Built-in wiki styles (mirrors the server's style registry). */
@@ -84,10 +87,34 @@ export interface AddRepoInput {
   wiki_style?: string | undefined;
 }
 
+export interface AddRepoRemoteInput {
+  /** `https://host/owner/repo`, `git@host:owner/repo.git`, or `owner/repo`. */
+  url: string;
+  name?: string | undefined;
+  default_branch?: string | undefined;
+  /** Only for private repositories. Used for the clone and then discarded. */
+  access_token?: string | undefined;
+  wiki_style?: string | undefined;
+}
+
+/** Where the repository comes from. `remote` is only offered when the
+ * adapter implements {@link AddRepoWizardAdapter.createRepoFromUrl}. */
+export type AddRepoSource = "local" | "remote";
+
 export interface AddRepoWizardAdapter {
   /** Register the repo without indexing; resolves to its id. Rejects with a
    * message (e.g. "path is not a git repository") that is shown inline. */
   createRepo: (input: AddRepoInput) => Promise<{ id: string; name: string }>;
+  /** Clone a remote repository onto the server, then register it.
+   *
+   * Cloning takes far longer than a form submit, so `onProgress` is called
+   * with what it is currently doing. Omitting this hides the "From URL"
+   * source entirely — the right behaviour for a client that can only ever
+   * reach repositories on its own filesystem. */
+  createRepoFromUrl?: (
+    input: AddRepoRemoteInput,
+    onProgress: (message: string) => void,
+  ) => Promise<{ id: string; name: string }>;
   /** Provider smoke test + size/cost estimate for the registered repo. */
   preflight: (repoId: string) => Promise<AddRepoPreflightResult>;
   /** Kick off the first full index; resolves to the job id. */
@@ -102,7 +129,16 @@ export interface AddRepoWizardAdapter {
   onDone: (repoId: string, jobId: string | null) => void;
 }
 
-type Step = "details" | "checking" | "confirm" | "provider-error";
+type Step = "details" | "cloning" | "checking" | "confirm" | "provider-error";
+
+/** Best-effort repository name from a remote URL, so the Name field fills
+ * itself for the common case of "just use what the remote calls it". */
+export function repoNameFromUrl(raw: string): string {
+  const trimmed = (raw || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  const lastSegment = trimmed.split(/[/:]/).filter(Boolean).pop() ?? "";
+  return lastSegment.replace(/\.git$/i, "");
+}
 
 function formatCostRange(est: NonNullable<AddRepoPreflightResult["estimate"]>): string {
   if (est.cost_low_usd != null && est.cost_high_usd != null) {
@@ -124,10 +160,17 @@ export interface AddRepoWizardProps {
  * broken provider surfaces its error with recovery paths before any spend.
  */
 export function AddRepoWizard({ adapter, open, onOpenChange }: AddRepoWizardProps) {
+  const supportsRemote = typeof adapter.createRepoFromUrl === "function";
   const [step, setStep] = useState<Step>("details");
+  const [source, setSource] = useState<AddRepoSource>("local");
   const [name, setName] = useState("");
+  // True once the user edits Name by hand, after which deriving it from the
+  // URL would overwrite their choice on every subsequent keystroke.
+  const [nameTouched, setNameTouched] = useState(false);
   const [localPath, setLocalPath] = useState("");
   const [url, setUrl] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [cloneMessage, setCloneMessage] = useState("");
   const [branch, setBranch] = useState("main");
   const [wikiStyle, setWikiStyle] = useState<string>(DEFAULT_WIKI_STYLE);
   const [submitting, setSubmitting] = useState(false);
@@ -161,9 +204,15 @@ export function AddRepoWizard({ adapter, open, onOpenChange }: AddRepoWizardProp
 
   const reset = useCallback(() => {
     setStep("details");
+    setSource("local");
     setName("");
+    setNameTouched(false);
     setLocalPath("");
     setUrl("");
+    // Cleared with everything else: a token must not survive into the next
+    // repository the operator adds.
+    setAccessToken("");
+    setCloneMessage("");
     setBranch("main");
     setWikiStyle(DEFAULT_WIKI_STYLE);
     setPathError(null);
@@ -226,29 +275,60 @@ export function AddRepoWizard({ adapter, open, onOpenChange }: AddRepoWizardProp
     [adapter, startIndexing],
   );
 
+  const effectiveName = name.trim() || (source === "remote" ? repoNameFromUrl(url) : "");
+  const detailsComplete =
+    source === "local" ? !!name.trim() && !!localPath.trim() : !!url.trim() && !!effectiveName;
+
   async function handleDetailsSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !localPath.trim()) return;
+    if (!detailsComplete) return;
     setSubmitting(true);
     setPathError(null);
     setError(null);
+    if (source === "remote") {
+      // A clone runs for minutes, so it gets its own step rather than a
+      // spinner on a button the operator is left staring at.
+      setCloneMessage("Connecting to the remote…");
+      setStep("cloning");
+    }
     try {
-      const repo = await adapter.createRepo({
-        name: name.trim(),
-        local_path: localPath.trim(),
-        url: url.trim() || undefined,
-        default_branch: branch.trim() || "main",
-        wiki_style: wikiStyle !== DEFAULT_WIKI_STYLE ? wikiStyle : undefined,
-      });
+      const repo =
+        source === "remote"
+          ? await adapter.createRepoFromUrl!(
+              {
+                url: url.trim(),
+                name: effectiveName,
+                // Blank means "whatever the remote's HEAD points at", which
+                // beats guessing between main and master.
+                default_branch: branch.trim() || undefined,
+                access_token: accessToken.trim() || undefined,
+                wiki_style: wikiStyle !== DEFAULT_WIKI_STYLE ? wikiStyle : undefined,
+              },
+              (message) => setCloneMessage(message),
+            )
+          : await adapter.createRepo({
+              name: name.trim(),
+              local_path: localPath.trim(),
+              url: url.trim() || undefined,
+              default_branch: branch.trim() || "main",
+              wiki_style: wikiStyle !== DEFAULT_WIKI_STYLE ? wikiStyle : undefined,
+            });
+      // The token has done its job; drop it rather than leaving it in state
+      // for the rest of the dialog's life.
+      setAccessToken("");
       setRepoId(repo.id);
       await runPreflight(repo.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to add repository";
-      // Path problems are by far the most common failure; anchor them to the field.
-      if (/path|director|git|exist/i.test(msg)) setPathError(msg);
+      // Anchor the failure to the field that caused it — for a remote that is
+      // the URL (bad host, private repo, no token), for a local add the path.
+      if (source === "remote") setPathError(msg);
+      else if (/path|director|git|exist/i.test(msg)) setPathError(msg);
       else setError(msg);
+      setStep("details");
     } finally {
       setSubmitting(false);
+      setCloneMessage("");
     }
   }
 
@@ -271,68 +351,162 @@ export function AddRepoWizard({ adapter, open, onOpenChange }: AddRepoWizardProp
             </DialogHeader>
 
             <form onSubmit={handleDetailsSubmit} className="space-y-4 py-2 min-w-0">
+              {supportsRemote && (
+                <Tabs
+                  value={source}
+                  onValueChange={(v) => {
+                    setSource(v as AddRepoSource);
+                    setPathError(null);
+                    setError(null);
+                  }}
+                >
+                  <TabsList className="w-full">
+                    <TabsTrigger value="local" className="flex-1">
+                      <FolderGit2 className="mr-1.5 h-3.5 w-3.5" />
+                      Local path
+                    </TabsTrigger>
+                    <TabsTrigger value="remote" className="flex-1">
+                      <Globe className="mr-1.5 h-3.5 w-3.5" />
+                      From URL
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              )}
+
+              {source === "remote" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="repo-remote-url">Repository URL</Label>
+                  <Input
+                    id="repo-remote-url"
+                    placeholder="https://github.com/org/repo"
+                    value={url}
+                    onChange={(e) => {
+                      setUrl(e.target.value);
+                      setPathError(null);
+                      // Fill Name from the URL until the operator types their
+                      // own, then leave theirs alone.
+                      if (!nameTouched) setName(repoNameFromUrl(e.target.value));
+                    }}
+                    className="font-mono"
+                    aria-invalid={!!pathError}
+                    aria-describedby="repo-remote-url-hint"
+                    required
+                  />
+                  {pathError ? (
+                    <p
+                      id="repo-remote-url-hint"
+                      className="text-xs text-[var(--color-outdated)]"
+                    >
+                      {pathError}
+                    </p>
+                  ) : (
+                    <p
+                      id="repo-remote-url-hint"
+                      className="text-xs text-[var(--color-text-tertiary)]"
+                    >
+                      The server clones it with full history. Also accepts{" "}
+                      <code>owner/repo</code>.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <Label htmlFor="repo-name">Name</Label>
                 <Input
                   id="repo-name"
                   placeholder="my-project"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setNameTouched(true);
+                  }}
+                  required={source === "local"}
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="repo-path">Local Path</Label>
-                <Input
-                  id="repo-path"
-                  placeholder="C:\Users\you\projects\my-project"
-                  value={localPath}
-                  onChange={(e) => {
-                    setLocalPath(e.target.value);
-                    setPathError(null);
-                  }}
-                  className="font-mono"
-                  aria-invalid={!!pathError}
-                  aria-describedby="repo-path-hint"
-                  required
-                />
-                {pathError ? (
-                  <p id="repo-path-hint" className="text-xs text-[var(--color-outdated)]">
-                    {pathError}
-                  </p>
-                ) : (
-                  <p id="repo-path-hint" className="text-xs text-[var(--color-text-tertiary)]">
-                    Absolute path to a local git checkout.
-                  </p>
-                )}
-              </div>
+              {source === "local" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="repo-path">Local Path</Label>
+                  <Input
+                    id="repo-path"
+                    placeholder="C:\Users\you\projects\my-project"
+                    value={localPath}
+                    onChange={(e) => {
+                      setLocalPath(e.target.value);
+                      setPathError(null);
+                    }}
+                    className="font-mono"
+                    aria-invalid={!!pathError}
+                    aria-describedby="repo-path-hint"
+                    required
+                  />
+                  {pathError ? (
+                    <p id="repo-path-hint" className="text-xs text-[var(--color-outdated)]">
+                      {pathError}
+                    </p>
+                  ) : (
+                    <p id="repo-path-hint" className="text-xs text-[var(--color-text-tertiary)]">
+                      Absolute path to a git checkout on the repowise server.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
+                {source === "local" ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="repo-url">
+                      Remote URL{" "}
+                      <span className="font-normal text-[var(--color-text-tertiary)]">
+                        (optional)
+                      </span>
+                    </Label>
+                    <Input
+                      id="repo-url"
+                      placeholder="https://github.com/org/repo"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="repo-token">
+                      Access token{" "}
+                      <span className="font-normal text-[var(--color-text-tertiary)]">
+                        (private only)
+                      </span>
+                    </Label>
+                    <Input
+                      id="repo-token"
+                      type="password"
+                      autoComplete="off"
+                      placeholder="ghp_…"
+                      value={accessToken}
+                      onChange={(e) => setAccessToken(e.target.value)}
+                      aria-describedby="repo-token-hint"
+                    />
+                  </div>
+                )}
                 <div className="space-y-1.5">
-                  <Label htmlFor="repo-url">
-                    Remote URL{" "}
-                    <span className="font-normal text-[var(--color-text-tertiary)]">
-                      (optional)
-                    </span>
+                  <Label htmlFor="repo-branch">
+                    {source === "remote" ? "Branch" : "Default Branch"}
                   </Label>
                   <Input
-                    id="repo-url"
-                    placeholder="https://github.com/org/repo"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="repo-branch">Default Branch</Label>
-                  <Input
                     id="repo-branch"
-                    placeholder="main"
+                    placeholder={source === "remote" ? "remote default" : "main"}
                     value={branch}
                     onChange={(e) => setBranch(e.target.value)}
                   />
                 </div>
               </div>
+
+              {source === "remote" && (
+                <p id="repo-token-hint" className="text-xs text-[var(--color-text-tertiary)]">
+                  A token is used for this clone and then discarded — it is never
+                  stored. Leave blank for public repositories.
+                </p>
+              )}
 
               <div className="space-y-1.5">
                 <Label htmlFor="repo-style">Wiki style</Label>
@@ -384,14 +558,29 @@ export function AddRepoWizard({ adapter, open, onOpenChange }: AddRepoWizardProp
                 <Button type="button" variant="ghost" onClick={() => handleOpenChange(false)}>
                   Cancel
                 </Button>
-                <Button
-                  type="submit"
-                  disabled={submitting || !name.trim() || !localPath.trim()}
-                >
+                <Button type="submit" disabled={submitting || !detailsComplete}>
                   {submitting ? "Adding…" : "Continue"}
                 </Button>
               </DialogFooter>
             </form>
+          </>
+        )}
+
+        {step === "cloning" && (
+          <>
+            <DialogHeader>
+              <DialogTitle>Cloning repository</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <Loader2 className="h-6 w-6 animate-spin text-[var(--color-accent-primary)]" />
+              <p className="text-sm text-[var(--color-text-secondary)]">
+                {cloneMessage || "Cloning…"}
+              </p>
+              <p className="text-xs text-[var(--color-text-tertiary)]">
+                Full history is fetched so ownership and churn analysis are
+                accurate. Large repositories can take a few minutes.
+              </p>
+            </div>
           </>
         )}
 

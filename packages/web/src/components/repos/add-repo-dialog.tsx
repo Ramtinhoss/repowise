@@ -5,7 +5,13 @@ import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
-import { createRepo, preflightIndex, startIndexJob } from "@/lib/api/repos";
+import {
+  createRepo,
+  createRepoFromRemote,
+  preflightIndex,
+  startIndexJob,
+  waitForClone,
+} from "@/lib/api/repos";
 import { getProviders } from "@/lib/api/providers";
 import { Button } from "@repowise-dev/ui/ui/button";
 import {
@@ -50,6 +56,26 @@ export function AddRepoDialog({
         });
         await mutate("/api/repos");
         return { id: repo.id, name: repo.name };
+      },
+      createRepoFromUrl: async (input, onProgress) => {
+        const task = await createRepoFromRemote({
+          url: input.url,
+          name: input.name,
+          default_branch: input.default_branch,
+          access_token: input.access_token,
+          settings: input.wiki_style ? { wiki_style: input.wiki_style } : undefined,
+        });
+        // The POST only starts the clone; the repo does not exist until it
+        // lands, so hold the wizard here rather than handing back an id
+        // nothing else could use yet.
+        const done = await waitForClone(task.clone_id, {
+          onProgress: (t) => onProgress(t.message),
+        });
+        if (!done.repo_id) {
+          throw new Error(done.error || "Clone finished without registering a repository");
+        }
+        await mutate("/api/repos");
+        return { id: done.repo_id, name: input.name || done.slug };
       },
       preflight: (repoId) => preflightIndex(repoId),
       startIndex: (repoId) => startIndexJob(repoId),

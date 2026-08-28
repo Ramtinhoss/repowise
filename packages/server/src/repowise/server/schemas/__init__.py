@@ -162,6 +162,8 @@ from .pages import (
 )
 from .pagination import Paginated
 from .repository import (
+    CloneTaskResponse,
+    RemoteRepoCreate,
     RepoCreate,
     RepoResponse,
     ReposSummaryResponse,
@@ -258,6 +260,7 @@ __all__ = [
     "ChangelogSectionModel",
     "ChatMessageResponse",
     "ChatRequest",
+    "CloneTaskResponse",
     "CochangeWarning",
     "CommitDetailResponse",
     "CommitEvolutionBucket",
@@ -342,6 +345,7 @@ __all__ = [
     "PageSummaryResponse",
     "PageVersionResponse",
     "Paginated",
+    "RemoteRepoCreate",
     "RepoCreate",
     "RepoResponse",
     "RepoStatsResponse",

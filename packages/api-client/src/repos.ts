@@ -1,6 +1,8 @@
 import type { ReposSummaryResponse } from "@repowise-dev/types/repos";
 import { apiGet, apiPost, apiPatch, apiDelete } from "./client";
 import type {
+  CloneTaskResponse,
+  RemoteRepoCreate,
   RepoCreate,
   RepoUpdate,
   RepoResponse,
@@ -29,6 +31,48 @@ export async function getRepo(repoId: string): Promise<RepoResponse> {
 
 export async function createRepo(data: RepoCreate): Promise<RepoResponse> {
   return apiPost<RepoResponse>("/api/repos", data);
+}
+
+/** Add a repository by URL; the server clones it onto its own disk.
+ *
+ * Returns immediately with a clone handle rather than the repository — a
+ * clone outlives an HTTP request. Poll {@link getRemoteClone} until
+ * `repo_id` is set, or use {@link waitForClone}. */
+export async function createRepoFromRemote(
+  data: RemoteRepoCreate,
+): Promise<CloneTaskResponse> {
+  return apiPost<CloneTaskResponse>("/api/repos/remote", data);
+}
+
+/** Current progress of a clone started by {@link createRepoFromRemote}. */
+export async function getRemoteClone(cloneId: string): Promise<CloneTaskResponse> {
+  return apiGet<CloneTaskResponse>(`/api/repos/remote/${cloneId}`);
+}
+
+/** Poll a clone to completion.
+ *
+ * Resolves with the finished task (`status` `"completed"`) or rejects with
+ * the server's error message. `onProgress` receives every poll so the caller
+ * can show what the clone is doing. */
+export async function waitForClone(
+  cloneId: string,
+  options: {
+    onProgress?: (task: CloneTaskResponse) => void;
+    intervalMs?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<CloneTaskResponse> {
+  const { onProgress, intervalMs = 1500, signal } = options;
+  for (;;) {
+    if (signal?.aborted) throw new Error("Clone polling cancelled");
+    const task = await getRemoteClone(cloneId);
+    onProgress?.(task);
+    if (task.status === "completed") return task;
+    if (task.status === "failed") {
+      throw new Error(task.error || `Could not add ${task.slug}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
 }
 
 export async function updateRepo(repoId: string, data: RepoUpdate): Promise<RepoResponse> {

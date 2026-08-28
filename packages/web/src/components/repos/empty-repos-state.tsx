@@ -16,7 +16,7 @@ export function EmptyReposState() {
     <div className="space-y-2">
       <EmptyState
         title="No repositories yet"
-        description="Point repowise at a local git repository to build its index, docs, and health signals."
+        description="Point repowise at a git repository — a path on this server, or a URL it clones for you — to build its index, docs, and health signals."
         icon={<FolderGit2 className="h-8 w-8" />}
         action={{ label: "Add repository", onClick: () => setOpen(true) }}
       />
